@@ -47,7 +47,7 @@ const authController = {
       await user.save();
 
       // Send verification email
-      const verificationUrl = `${process.env.FRONTEND_URL}/verify-email/${verificationToken}`;
+      const verificationUrl = `${process.env.FRONTEND_URL.replace(/\/$/, '')}/verify-email/${verificationToken}`;
       await sendEmail({
         to: user.email,
         subject: 'Email Verification',
@@ -81,7 +81,8 @@ const authController = {
       console.error('Signup error:', error);
       res.status(500).json({
         status: 'error',
-        message: 'Internal server error'
+        message: 'Internal server error',
+        error: error.message
       });
     }
   },
@@ -121,7 +122,7 @@ const authController = {
       if (!user.isActive) {
         return res.status(401).json({
           status: 'error',
-          message: 'Account has been deactivated'
+          message: 'Account is not verified'
         });
       }
 
@@ -170,7 +171,8 @@ const authController = {
       console.error('Login error:', error);
       res.status(500).json({
         status: 'error',
-        message: 'Internal server error'
+        message: 'Internal server error',
+        error: error.message
       });
     }
   },
@@ -187,7 +189,8 @@ const authController = {
       console.error('Logout error:', error);
       res.status(500).json({
         status: 'error',
-        message: 'Internal server error'
+        message: 'Internal server error',
+        error: error.message
       });
     }
   },
@@ -227,7 +230,8 @@ const authController = {
       console.error('Refresh token error:', error);
       res.status(401).json({
         status: 'error',
-        message: 'Invalid refresh token'
+        message: 'Invalid refresh token',
+        error: error.message
       });
     }
   },
@@ -272,7 +276,8 @@ const authController = {
       console.error('Forgot password error:', error);
       res.status(500).json({
         status: 'error',
-        message: 'Internal server error'
+        message: 'Internal server error',
+        error: error.message
       });
     }
   },
@@ -316,7 +321,8 @@ const authController = {
       console.error('Reset password error:', error);
       res.status(500).json({
         status: 'error',
-        message: 'Internal server error'
+        message: 'Internal server error',
+        error: error.message
       });
     }
   },
@@ -352,7 +358,8 @@ const authController = {
       console.error('Verify email error:', error);
       res.status(500).json({
         status: 'error',
-        message: 'Internal server error'
+        message: 'Internal server error',
+        error: error.message
       });
     }
   },

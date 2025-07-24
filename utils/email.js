@@ -16,13 +16,18 @@ const transporter = nodemailer.createTransport({
 
 const sendEmail = async ({ to, subject, template, context }) => {
   try {
+    // Ensure verificationUrl exists and is not undefined
+    const verificationUrl = context.verificationUrl || '';
+    
     // Email templates
     const templates = {
       emailVerification: `
         <h2>Welcome ${context.name}!</h2>
         <p>Please click the link below to verify your email address:</p>
-        <a href="${context.verificationUrl}" style="background: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Verify Email</a>
+        <a href="${verificationUrl}" style="background: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Verify Email</a>
         <p>This link will expire in 24 hours.</p>
+        <p>If the button doesn't work, copy and paste this link in your browser:</p>
+        <p>${verificationUrl}</p>
       `,
       passwordReset: `
         <h2>Password Reset Request</h2>

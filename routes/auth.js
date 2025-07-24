@@ -26,7 +26,7 @@ router.post('/logout', authController.logout);
 router.post('/refresh-token', authController.refreshToken);
 router.post('/forgot-password', authController.forgotPassword);
 router.post('/reset-password/:token', authController.resetPassword);
-router.post('/verify-email/:token', authController.verifyEmail);
+router.get('/verify-email/:token', authController.verifyEmail);
 router.post('/resend-verification', authController.resendVerification);
 router.get('/me', auth, authController.getMe);
 router.put('/update-password', auth, authController.updatePassword);
