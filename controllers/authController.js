@@ -207,7 +207,7 @@ const authController = {
         });
       }
 
-      const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
+      const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
       const user = await User.findById(decoded.userId);
 
       if (!user || !user.isActive) {
@@ -222,6 +222,14 @@ const authController = {
       res.json({
         status: 'success',
         data: {
+          user: {
+            id: user._id,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            email: user.email,
+            role: user.role,
+            isEmailVerified: user.isEmailVerified
+          },
           accessToken: tokens.accessToken,
           refreshToken: tokens.refreshToken
         }
