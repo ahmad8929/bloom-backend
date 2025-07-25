@@ -10,25 +10,31 @@ const categorySchema = new mongoose.Schema({
   },
   slug: {
     type: String,
+    required: true,
     unique: true,
     lowercase: true
   },
   description: {
     type: String,
-    maxlength: 500
+    trim: true
   },
   image: {
-    type: String
+    url: String,
+    alt: String
   },
-  featured: {
+  isActive: {
     type: Boolean,
-    default: false
+    default: true
+  },
+  productCount: {
+    type: Number,
+    default: 0
   }
 }, {
   timestamps: true
 });
 
-// Create slug from name
+// Create slug from name before saving
 categorySchema.pre('save', function(next) {
   if (this.isModified('name')) {
     this.slug = this.name.toLowerCase().replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-');
@@ -37,4 +43,3 @@ categorySchema.pre('save', function(next) {
 });
 
 module.exports = mongoose.model('Category', categorySchema);
-

@@ -1,6 +1,6 @@
 // routes/admin.js
 const express = require('express');
-const { adminAuth, superAdminAuth } = require('../middlewares/auth');
+const { adminAuth } = require('../middlewares/auth');
 const adminController = require('../controllers/adminController');
 
 const router = express.Router();
@@ -8,21 +8,14 @@ const router = express.Router();
 // Dashboard stats
 router.get('/dashboard', adminAuth, adminController.getDashboardStats);
 
-// User management
-router.get('/users', adminAuth, adminController.getUsers);
-router.patch('/users/:id/status', adminAuth, adminController.updateUserStatus);
-router.patch('/users/:id/role', superAdminAuth, adminController.updateUserRole);
-
-// Product management
-router.get('/products/low-stock', adminAuth, adminController.getLowStockProducts);
-router.get('/products/stats', adminAuth, adminController.getProductStats);
+// Customer management
+router.get('/customers', adminAuth, adminController.getCustomers);
+router.patch('/customers/:id/email-verification', adminAuth, adminController.toggleEmailVerification);
+router.patch('/customers/:id/role', adminAuth, adminController.updateUserRole);
 
 // Order management
-router.get('/orders/recent', adminAuth, adminController.getRecentOrders);
-router.get('/orders/stats', adminAuth, adminController.getOrderStats);
-
-// Analytics
-router.get('/analytics/sales', adminAuth, adminController.getSalesAnalytics);
-router.get('/analytics/customers', adminAuth, adminController.getCustomerAnalytics);
+router.get('/orders', adminAuth, adminController.getOrders);
+router.get('/orders/:id', adminAuth, adminController.getOrder);
+router.patch('/orders/:id/status', adminAuth, adminController.updateOrderStatus);
 
 module.exports = router;

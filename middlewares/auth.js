@@ -1,22 +1,30 @@
-
 // middlewares/auth.js
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
 const auth = async (req, res, next) => {
   try {
-    const authHeader = req.header('Authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({
-        status: 'error',
-        message: 'Access denied. No token provided or invalid format.'
-      });
+    let token;
+    
+    // Check for token in cookies first
+    if (req.cookies && req.cookies['auth-token']) {
+      token = req.cookies['auth-token'];
+    } 
+    // Then check Authorization header
+    else {
+      const authHeader = req.header('Authorization');
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return res.status(401).json({
+          status: 'error',
+          message: 'Access denied. No token provided.'
+        });
+      }
+      token = authHeader.replace('Bearer ', '');
     }
 
-    const token = authHeader.replace('Bearer ', '');
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    const user = await User.findById(decoded.userId).select('_id role isActive');
+    const user = await User.findById(decoded.userId).select('_id role isActive emailVerified firstName lastName email');
     if (!user || !user.isActive) {
       return res.status(401).json({
         status: 'error',
@@ -24,7 +32,15 @@ const auth = async (req, res, next) => {
       });
     }
 
-    req.user = { id: user._id, role: user.role };
+    // Add user info to request
+    req.user = {
+      id: user._id,
+      role: user.role,
+      emailVerified: user.emailVerified,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email
+    };
     next();
   } catch (error) {
     if (error.name === 'TokenExpiredError') {
@@ -47,19 +63,19 @@ const auth = async (req, res, next) => {
   }
 };
 
-const checkRole = (allowedRoles) => async (req, res, next) => {
+const adminAuth = async (req, res, next) => {
   try {
     await auth(req, res, () => {
-      if (!allowedRoles.includes(req.user.role)) {
+      if (req.user.role !== 'admin') {
         return res.status(403).json({
           status: 'error',
-          message: `Access denied. ${allowedRoles.join(' or ')} privileges required.`
+          message: 'Access denied. Admin privileges required.'
         });
       }
       next();
     });
   } catch (error) {
-    console.error(`Role check error (${allowedRoles.join(', ')}):`, error);
+    console.error('Admin auth error:', error);
     res.status(403).json({
       status: 'error',
       message: 'Access denied'
@@ -67,7 +83,4 @@ const checkRole = (allowedRoles) => async (req, res, next) => {
   }
 };
 
-const adminAuth = checkRole(['admin', 'super-admin']);
-const superAdminAuth = checkRole(['super-admin']);
-
-module.exports = { auth, adminAuth, superAdminAuth };
+module.exports = { auth, adminAuth };

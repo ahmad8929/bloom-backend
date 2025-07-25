@@ -1,5 +1,3 @@
-
-
 // server.js
 const express = require('express');
 const mongoose = require('mongoose');
@@ -10,6 +8,7 @@ const rateLimit = require('express-rate-limit');
 const mongoSanitize = require('express-mongo-sanitize');
 const xss = require('xss-clean');
 const morgan = require('morgan');
+const cookieParser = require('cookie-parser');
 require('dotenv').config();
 
 // Import core routes only
@@ -50,16 +49,31 @@ if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 }
 
+// Add cookie parser before routes
+app.use(cookieParser());
+
 // Simplified CORS configuration
 const corsOptions = {
   origin: process.env.NODE_ENV === 'production'
     ? [process.env.FRONTEND_URL || 'https://your-production-domain.com']
-    : ['http://localhost:3000'],
+    : ['http://localhost:3001', 'http://localhost:3000'],
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'Accept',
+    'Origin',
+    'Access-Control-Request-Method',
+    'Access-Control-Request-Headers'
+  ],
+  exposedHeaders: ['Content-Range', 'X-Content-Range']
 };
 app.use(cors(corsOptions));
+
+// Enable pre-flight requests for all routes
+app.options('*', cors(corsOptions));
 
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
@@ -89,16 +103,40 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 5000;
 const server = app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
-// Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI, {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
+// Connect to MongoDB - FIXED: Removed deprecated options
+mongoose.connect(process.env.MONGODB_URI)
+.then(() => {
+  console.log('Connected to MongoDB');
+  // Initialize default categories
+  initializeCategories();
 })
-.then(() => console.log('Connected to MongoDB'))
 .catch(err => {
   console.error('MongoDB connection error:', err);
   process.exit(1);
 });
+
+// Initialize default categories
+async function initializeCategories() {
+  try {
+    const Category = require('./models/Category');
+    const existingCategories = await Category.countDocuments();
+    
+    if (existingCategories === 0) {
+      const defaultCategories = [
+        { name: 'Dresses', slug: 'dresses', description: 'Beautiful dresses for every occasion' },
+        { name: 'Tops', slug: 'tops', description: 'Stylish tops and blouses' },
+        { name: 'Bottoms', slug: 'bottoms', description: 'Pants, skirts, and shorts' },
+        { name: 'Outerwear', slug: 'outerwear', description: 'Jackets and coats' },
+        { name: 'Accessories', slug: 'accessories', description: 'Bags, jewelry, and more' }
+      ];
+      
+      await Category.insertMany(defaultCategories);
+      console.log('Default categories created');
+    }
+  } catch (error) {
+    console.log('Categories already exist or error creating them:', error.message);
+  }
+}
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (err) => {

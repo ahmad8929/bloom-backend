@@ -1,11 +1,7 @@
-
-
-
 // controllers/adminController.js
 const User = require('../models/User');
 const Product = require('../models/Product');
 const Order = require('../models/Order');
-const Category = require('../models/Category');
 
 const adminController = {
   // Get dashboard statistics
@@ -17,50 +13,26 @@ const adminController = {
         totalOrders,
         totalRevenue,
         recentOrders,
-        lowStockProducts
+        verifiedUsers,
+        unverifiedUsers
       ] = await Promise.all([
         User.countDocuments({ role: 'user' }),
         Product.countDocuments({ status: 'active' }),
         Order.countDocuments(),
         Order.aggregate([
-          { $match: { 'payment.status': 'completed' } },
-          { $group: { _id: null, total: { $sum: '$totals.total' } } }
+          { $match: { status: { $in: ['delivered', 'completed'] } } },
+          { $group: { _id: null, total: { $sum: '$total' } } }
         ]),
         Order.find()
-          .populate('user', 'firstName lastName')
+          .populate('user', 'firstName lastName email')
           .sort('-createdAt')
-          .limit(5),
-        Product.find({
-          trackQuantity: true,
-          $expr: { $lte: ['$quantity', '$lowStockThreshold'] }
-        }).limit(10)
+          .limit(5)
+          .lean(),
+        User.countDocuments({ role: 'user', emailVerified: true }),
+        User.countDocuments({ role: 'user', emailVerified: false })
       ]);
 
       const revenue = totalRevenue[0]?.total || 0;
-
-      // Get monthly statistics
-      const sixMonthsAgo = new Date();
-      sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-
-      const monthlyStats = await Order.aggregate([
-        {
-          $match: {
-            createdAt: { $gte: sixMonthsAgo },
-            'payment.status': 'completed'
-          }
-        },
-        {
-          $group: {
-            _id: {
-              year: { $year: '$createdAt' },
-              month: { $month: '$createdAt' }
-            },
-            orders: { $sum: 1 },
-            revenue: { $sum: '$totals.total' }
-          }
-        },
-        { $sort: { '_id.year': 1, '_id.month': 1 } }
-      ]);
 
       res.json({
         status: 'success',
@@ -70,11 +42,19 @@ const adminController = {
             totalProducts,
             totalOrders,
             totalRevenue: revenue,
-            lowStockCount: lowStockProducts.length
+            verifiedUsers,
+            unverifiedUsers
           },
-          recentOrders,
-          lowStockProducts,
-          monthlyStats
+          recentOrders: recentOrders.map(order => ({
+            id: order._id,
+            orderNumber: order.orderNumber || `ORD-${order._id.toString().slice(-6).toUpperCase()}`,
+            customerName: order.user ? `${order.user.firstName} ${order.user.lastName}` : 'Guest',
+            customerEmail: order.user?.email || 'N/A',
+            status: order.status,
+            total: order.total || 0,
+            items: order.items?.length || 0,
+            createdAt: order.createdAt
+          }))
         }
       });
     } catch (error) {
@@ -86,14 +66,17 @@ const adminController = {
     }
   },
 
-  // Get all users
-  async getUsers(req, res) {
+  // Get all customers (users)
+  async getCustomers(req, res) {
     try {
-      const { page = 1, limit = 20, role, search, status } = req.query;
+      const { page = 1, limit = 20, search, emailVerified } = req.query;
 
-      const filter = {};
-      if (role) filter.role = role;
-      if (status) filter.isActive = status === 'active';
+      const filter = { role: 'user' };
+      
+      if (emailVerified !== undefined) {
+        filter.emailVerified = emailVerified === 'true';
+      }
+      
       if (search) {
         filter.$or = [
           { firstName: { $regex: search, $options: 'i' } },
@@ -106,17 +89,46 @@ const adminController = {
       const total = await User.countDocuments(filter);
       const totalPages = Math.ceil(total / limit);
 
-      const users = await User.find(filter)
+      const customers = await User.find(filter)
         .select('-password')
         .sort('-createdAt')
         .skip(skip)
         .limit(Number(limit))
         .lean();
 
+      // Get order stats for each customer
+      const customersWithStats = await Promise.all(
+        customers.map(async (customer) => {
+          const orderStats = await Order.aggregate([
+            { $match: { user: customer._id } },
+            {
+              $group: {
+                _id: null,
+                totalOrders: { $sum: 1 },
+                totalSpent: { $sum: '$total' }
+              }
+            }
+          ]);
+
+          return {
+            id: customer._id,
+            firstName: customer.firstName,
+            lastName: customer.lastName,
+            email: customer.email,
+            emailVerified: customer.emailVerified,
+            role: customer.role,
+            totalOrders: orderStats[0]?.totalOrders || 0,
+            totalSpent: orderStats[0]?.totalSpent || 0,
+            createdAt: customer.createdAt,
+            lastLoginAt: customer.lastLogin
+          };
+        })
+      );
+
       res.json({
         status: 'success',
         data: {
-          users,
+          customers: customersWithStats,
           pagination: {
             page: Number(page),
             limit: Number(limit),
@@ -128,7 +140,7 @@ const adminController = {
         }
       });
     } catch (error) {
-      console.error('Get users error:', error);
+      console.error('Get customers error:', error);
       res.status(500).json({
         status: 'error',
         message: 'Internal server error'
@@ -136,14 +148,14 @@ const adminController = {
     }
   },
 
-  // Update user status
-  async updateUserStatus(req, res) {
+  // Toggle email verification
+  async toggleEmailVerification(req, res) {
     try {
-      const { isActive } = req.body;
+      const { emailVerified } = req.body;
 
       const user = await User.findByIdAndUpdate(
         req.params.id,
-        { isActive },
+        { emailVerified },
         { new: true }
       ).select('-password');
 
@@ -156,11 +168,11 @@ const adminController = {
 
       res.json({
         status: 'success',
-        message: `User ${isActive ? 'activated' : 'deactivated'} successfully`,
+        message: `Email ${emailVerified ? 'verified' : 'unverified'} successfully`,
         data: { user }
       });
     } catch (error) {
-      console.error('Update user status error:', error);
+      console.error('Toggle email verification error:', error);
       res.status(500).json({
         status: 'error',
         message: 'Internal server error'
@@ -173,7 +185,7 @@ const adminController = {
     try {
       const { role } = req.body;
 
-      if (!['user', 'admin', 'super-admin'].includes(role)) {
+      if (!['user', 'admin'].includes(role)) {
         return res.status(400).json({
           status: 'error',
           message: 'Invalid role'
@@ -207,148 +219,71 @@ const adminController = {
     }
   },
 
-  // Get low stock products
-  async getLowStockProducts(req, res) {
+  // Get all orders
+  async getOrders(req, res) {
     try {
-      const products = await Product.find({
-        trackQuantity: true,
-        $expr: { $lte: ['$quantity', '$lowStockThreshold'] }
-      })
-        .populate('category', 'name')
-        .sort('quantity')
-        .lean();
+      const { page = 1, limit = 20, status, search } = req.query;
 
-      res.json({
-        status: 'success',
-        data: { products }
-      });
-    } catch (error) {
-      console.error('Get low stock products error:', error);
-      res.status(500).json({
-        status: 'error',
-        message: 'Internal server error'
-      });
-    }
-  },
+      const filter = {};
+      if (status && status !== 'all') {
+        filter.status = status;
+      }
+      
+      if (search) {
+        const users = await User.find({
+          $or: [
+            { firstName: { $regex: search, $options: 'i' } },
+            { lastName: { $regex: search, $options: 'i' } },
+            { email: { $regex: search, $options: 'i' } }
+          ]
+        }).select('_id');
+        
+        const userIds = users.map(user => user._id);
+        filter.$or = [
+          { user: { $in: userIds } },
+          { orderNumber: { $regex: search, $options: 'i' } }
+        ];
+      }
 
-  // Get product statistics
-  async getProductStats(req, res) {
-    try {
-      const [
-        totalProducts,
-        activeProducts,
-        outOfStockProducts,
-        categoryStats
-      ] = await Promise.all([
-        Product.countDocuments(),
-        Product.countDocuments({ status: 'active' }),
-        Product.countDocuments({ 
-          trackQuantity: true, 
-          quantity: 0 
-        }),
-        Product.aggregate([
-          { $match: { status: 'active' } },
-          {
-            $group: {
-              _id: '$category',
-              count: { $sum: 1 },
-              totalValue: { $sum: { $multiply: ['$price', '$quantity'] } }
-            }
-          },
-          {
-            $lookup: {
-              from: 'categories',
-              localField: '_id',
-              foreignField: '_id',
-              as: 'category'
-            }
-          },
-          { $unwind: '$category' },
-          {
-            $project: {
-              categoryName: '$category.name',
-              count: 1,
-              totalValue: 1
-            }
-          }
-        ])
-      ]);
+      const skip = (page - 1) * limit;
+      const total = await Order.countDocuments(filter);
+      const totalPages = Math.ceil(total / limit);
 
-      res.json({
-        status: 'success',
-        data: {
-          totalProducts,
-          activeProducts,
-          outOfStockProducts,
-          categoryStats
-        }
-      });
-    } catch (error) {
-      console.error('Get product stats error:', error);
-      res.status(500).json({
-        status: 'error',
-        message: 'Internal server error'
-      });
-    }
-  },
-
-  // Get recent orders
-  async getRecentOrders(req, res) {
-    try {
-      const { limit = 10 } = req.query;
-
-      const orders = await Order.find()
+      const orders = await Order.find(filter)
         .populate('user', 'firstName lastName email')
         .sort('-createdAt')
+        .skip(skip)
         .limit(Number(limit))
         .lean();
 
-      res.json({
-        status: 'success',
-        data: { orders }
-      });
-    } catch (error) {
-      console.error('Get recent orders error:', error);
-      res.status(500).json({
-        status: 'error',
-        message: 'Internal server error'
-      });
-    }
-  },
-
-  // Get order statistics
-  async getOrderStats(req, res) {
-    try {
-      const [
-        totalOrders,
-        pendingOrders,
-        completedOrders,
-        statusStats
-      ] = await Promise.all([
-        Order.countDocuments(),
-        Order.countDocuments({ status: { $in: ['pending', 'confirmed'] } }),
-        Order.countDocuments({ status: 'delivered' }),
-        Order.aggregate([
-          {
-            $group: {
-              _id: '$status',
-              count: { $sum: 1 }
-            }
-          }
-        ])
-      ]);
+      const formattedOrders = orders.map(order => ({
+        id: order._id,
+        orderNumber: order.orderNumber || `ORD-${order._id.toString().slice(-6).toUpperCase()}`,
+        customerName: order.user ? `${order.user.firstName} ${order.user.lastName}` : 'Guest',
+        customerEmail: order.user?.email || 'N/A',
+        status: order.status,
+        total: order.total || 0,
+        items: order.items?.length || 0,
+        createdAt: order.createdAt,
+        shippingAddress: order.shippingAddress || {}
+      }));
 
       res.json({
         status: 'success',
         data: {
-          totalOrders,
-          pendingOrders,
-          completedOrders,
-          statusStats
+          orders: formattedOrders,
+          pagination: {
+            page: Number(page),
+            limit: Number(limit),
+            total,
+            totalPages,
+            hasNext: page < totalPages,
+            hasPrev: page > 1
+          }
         }
       });
     } catch (error) {
-      console.error('Get order stats error:', error);
+      console.error('Get orders error:', error);
       res.status(500).json({
         status: 'error',
         message: 'Internal server error'
@@ -356,56 +291,39 @@ const adminController = {
     }
   },
 
-  // Get sales analytics
-  async getSalesAnalytics(req, res) {
+  // Update order status
+  async updateOrderStatus(req, res) {
     try {
-      const { period = '30d' } = req.query;
+      const { status } = req.body;
+      const validStatuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
 
-      let startDate = new Date();
-      switch (period) {
-        case '7d':
-          startDate.setDate(startDate.getDate() - 7);
-          break;
-        case '30d':
-          startDate.setDate(startDate.getDate() - 30);
-          break;
-        case '90d':
-          startDate.setDate(startDate.getDate() - 90);
-          break;
-        case '1y':
-          startDate.setFullYear(startDate.getFullYear() - 1);
-          break;
-        default:
-          startDate.setDate(startDate.getDate() - 30);
+      if (!validStatuses.includes(status)) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Invalid order status'
+        });
       }
 
-      const salesData = await Order.aggregate([
-        {
-          $match: {
-            createdAt: { $gte: startDate },
-            'payment.status': 'completed'
-          }
-        },
-        {
-          $group: {
-            _id: {
-              year: { $year: '$createdAt' },
-              month: { $month: '$createdAt' },
-              day: { $dayOfMonth: '$createdAt' }
-            },
-            revenue: { $sum: '$totals.total' },
-            orders: { $sum: 1 }
-          }
-        },
-        { $sort: { '_id.year': 1, '_id.month': 1, '_id.day': 1 } }
-      ]);
+      const order = await Order.findByIdAndUpdate(
+        req.params.id,
+        { status, updatedAt: new Date() },
+        { new: true }
+      ).populate('user', 'firstName lastName email');
+
+      if (!order) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Order not found'
+        });
+      }
 
       res.json({
         status: 'success',
-        data: { salesData }
+        message: 'Order status updated successfully',
+        data: { order }
       });
     } catch (error) {
-      console.error('Get sales analytics error:', error);
+      console.error('Update order status error:', error);
       res.status(500).json({
         status: 'error',
         message: 'Internal server error'
@@ -413,60 +331,27 @@ const adminController = {
     }
   },
 
-  // Get customer analytics
-  async getCustomerAnalytics(req, res) {
+  // Get single order details
+  async getOrder(req, res) {
     try {
-      const [
-        newCustomers,
-        totalCustomers,
-        topCustomers
-      ] = await Promise.all([
-        User.countDocuments({
-          role: 'user',
-          createdAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
-        }),
-        User.countDocuments({ role: 'user' }),
-        Order.aggregate([
-          { $match: { 'payment.status': 'completed' } },
-          {
-            $group: {
-              _id: '$user',
-              totalSpent: { $sum: '$totals.total' },
-              orderCount: { $sum: 1 }
-            }
-          },
-          {
-            $lookup: {
-              from: 'users',
-              localField: '_id',
-              foreignField: '_id',
-              as: 'user'
-            }
-          },
-          { $unwind: '$user' },
-          {
-            $project: {
-              name: { $concat: ['$user.firstName', ' ', '$user.lastName'] },
-              email: '$user.email',
-              totalSpent: 1,
-              orderCount: 1
-            }
-          },
-          { $sort: { totalSpent: -1 } },
-          { $limit: 10 }
-        ])
-      ]);
+      const order = await Order.findById(req.params.id)
+        .populate('user', 'firstName lastName email')
+        .populate('items.product', 'name price images')
+        .lean();
+
+      if (!order) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Order not found'
+        });
+      }
 
       res.json({
         status: 'success',
-        data: {
-          newCustomers,
-          totalCustomers,
-          topCustomers
-        }
+        data: { order }
       });
     } catch (error) {
-      console.error('Get customer analytics error:', error);
+      console.error('Get order error:', error);
       res.status(500).json({
         status: 'error',
         message: 'Internal server error'
