@@ -1,4 +1,3 @@
-
 // models/Product.js
 const mongoose = require('mongoose');
 
@@ -28,44 +27,37 @@ const productSchema = new mongoose.Schema({
     type: Number,
     min: 0
   },
-  category: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Category',
-    required: true
+  size: {
+    type: String,
+    enum: ['XS', 'S', 'M', 'L', 'XL', 'XXL'],
+    required: [true, 'Product size is required']
+  },
+  material: {
+    type: String,
+    required: [true, 'Product material is required'],
+    trim: true
+  },
+  careInstructions: {
+    type: String,
+    required: [true, 'Care instructions are required']
+  },
+  isNewArrival: {
+    type: Boolean,
+    default: false
+  },
+  isSale: {
+    type: Boolean,
+    default: false
   },
   images: [{
     url: { type: String, required: true },
     alt: String,
     isPrimary: { type: Boolean, default: false }
   }],
-  sizes: [{
-    size: {
-      type: String,
-      enum: ['XS', 'S', 'M', 'L', 'XL', 'XXL'],
-      required: true
-    },
-    quantity: {
-      type: Number,
-      required: true,
-      min: 0
-    }
-  }],
   colors: [{
     name: String,
-    hexCode: String,
-    images: [String]
-  }],
-  material: String,
-  careInstructions: [String],
-  status: {
-    type: String,
-    enum: ['active', 'inactive', 'draft'],
-    default: 'active'
-  },
-  featured: {
-    type: Boolean,
-    default: false
-  }
+    hexCode: String
+  }]
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
@@ -88,14 +80,12 @@ productSchema.virtual('discountPercentage').get(function() {
   return 0;
 });
 
-// Virtual for total quantity across all sizes
-productSchema.virtual('totalQuantity').get(function() {
-  return this.sizes.reduce((total, size) => total + size.quantity, 0);
-});
-
-productSchema.index({ name: 'text', description: 'text' });
-productSchema.index({ category: 1, status: 1 });
+// Search index
+productSchema.index({ name: 'text', description: 'text', material: 'text' });
 productSchema.index({ price: 1 });
+productSchema.index({ size: 1 });
+productSchema.index({ isNewArrival: 1 });
+productSchema.index({ isSale: 1 });
 productSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model('Product', productSchema);

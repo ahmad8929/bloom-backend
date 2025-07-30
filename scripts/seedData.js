@@ -32,43 +32,36 @@ const seedData = async () => {
     await adminUser.save();
 
     // Create sample categories
-    const electronics = new Category({
-      name: 'Electronics',
-      description: 'Electronic devices and gadgets'
-    });
-    await electronics.save();
+    const categories = [
+      { name: 'Saree', description: 'Traditional Indian attire' },
+      { name: 'Kurti', description: 'Comfortable and stylish kurtis' },
+      { name: 'Western Dress', description: 'Modern and trendy western dresses' },
+      { name: 'Jeans', description: 'Durable and fashionable jeans' },
+      { name: 'Top', description: 'Variety of tops for every occasion' },
+      { name: 'Skirts', description: 'Elegant and casual skirts' },
+      { name: 'Others', description: 'Other miscellaneous items' }
+    ];
 
-    const clothing = new Category({
-      name: 'Clothing',
-      description: 'Fashion and apparel'
-    });
-    await clothing.save();
+    const createdCategories = await Category.insertMany(categories);
+    console.log('Categories seeded');
 
     // Create sample products
     const sampleProducts = [
       {
-        name: 'Smartphone',
-        description: 'Latest smartphone with advanced features',
-        price: 699.99,
-        category: electronics._id,
-        sku: 'PHONE001',
-        quantity: 50,
-        images: [{
-          url: 'https://via.placeholder.com/400x400',
-          isPrimary: true
-        }]
+        name: 'Classic Saree',
+        description: 'A beautiful classic saree.',
+        price: 1999.99,
+        category: createdCategories.find(c => c.name === 'Saree')._id,
+        sizes: [{ size: 'M', quantity: 10 }],
+        images: [{ url: 'https://via.placeholder.com/400x400', isPrimary: true }]
       },
       {
-        name: 'T-Shirt',
-        description: 'Comfortable cotton t-shirt',
-        price: 29.99,
-        category: clothing._id,
-        sku: 'SHIRT001',
-        quantity: 100,
-        images: [{
-          url: 'https://via.placeholder.com/400x400',
-          isPrimary: true
-        }]
+        name: 'Designer Kurti',
+        description: 'A stylish designer kurti.',
+        price: 799.99,
+        category: createdCategories.find(c => c.name === 'Kurti')._id,
+        sizes: [{ size: 'L', quantity: 20 }],
+        images: [{ url: 'https://via.placeholder.com/400x400', isPrimary: true }]
       }
     ];
 

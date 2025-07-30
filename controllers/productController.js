@@ -1,5 +1,4 @@
 const Product = require('../models/Product');
-const Category = require('../models/Category');
 const { uploadToCloudinary } = require('../utils/cloudinary');
 
 const productController = {
@@ -10,26 +9,22 @@ const productController = {
         page = 1,
         limit = 20,
         sort = '-createdAt',
-        category,
         minPrice,
         maxPrice,
-        status = 'active',
-        featured,
+        size,
+        material,
+        isNewArrival,
+        isSale,
         search
       } = req.query;
 
       // Build filter object
       const filter = {};
       
-      // Only apply status filter for non-admin requests
-      if (req.user?.role !== 'admin') {
-        filter.status = 'active';
-      } else if (status !== 'all') {
-        filter.status = status;
-      }
-
-      if (category && category !== 'all') filter.category = category;
-      if (featured !== undefined) filter.featured = featured === 'true';
+      if (size && size !== 'all') filter.size = size;
+      if (material) filter.material = { $regex: material, $options: 'i' };
+      if (isNewArrival !== undefined) filter.isNewArrival = isNewArrival === 'true';
+      if (isSale !== undefined) filter.isSale = isSale === 'true';
       
       if (minPrice || maxPrice) {
         filter.price = {};
@@ -40,7 +35,8 @@ const productController = {
       if (search) {
         filter.$or = [
           { name: { $regex: search, $options: 'i' } },
-          { description: { $regex: search, $options: 'i' } }
+          { description: { $regex: search, $options: 'i' } },
+          { material: { $regex: search, $options: 'i' } }
         ];
       }
 
@@ -51,7 +47,6 @@ const productController = {
 
       // Get products
       const products = await Product.find(filter)
-        .populate('category', 'name slug')
         .sort(sort)
         .skip(skip)
         .limit(Number(limit))
@@ -83,8 +78,7 @@ const productController = {
   // Get single product
   async getProduct(req, res) {
     try {
-      const product = await Product.findById(req.params.id)
-        .populate('category', 'name slug');
+      const product = await Product.findById(req.params.id);
 
       if (!product) {
         return res.status(404).json({
@@ -106,83 +100,12 @@ const productController = {
     }
   },
 
-  // Get products by category
-  async getProductsByCategory(req, res) {
-    try {
-      const { categoryId } = req.params;
-      const { page = 1, limit = 20, sort = '-createdAt' } = req.query;
-
-      // Check if category exists
-      const category = await Category.findById(categoryId);
-      if (!category) {
-        return res.status(404).json({
-          status: 'error',
-          message: 'Category not found'
-        });
-      }
-
-      const filter = {
-        category: categoryId,
-        status: 'active'
-      };
-
-      const skip = (page - 1) * limit;
-      const total = await Product.countDocuments(filter);
-      const totalPages = Math.ceil(total / limit);
-
-      const products = await Product.find(filter)
-        .populate('category', 'name slug')
-        .sort(sort)
-        .skip(skip)
-        .limit(Number(limit))
-        .lean();
-
-      res.json({
-        status: 'success',
-        data: {
-          products,
-          category,
-          pagination: {
-            page: Number(page),
-            limit: Number(limit),
-            total,
-            totalPages,
-            hasNext: page < totalPages,
-            hasPrev: page > 1
-          }
-        }
-      });
-    } catch (error) {
-      console.error('Get products by category error:', error);
-      res.status(500).json({
-        status: 'error',
-        message: 'Internal server error'
-      });
-    }
-  },
-
   // Create product (Admin only)
   async createProduct(req, res) {
     try {
       const productData = req.body;
       console.log('Creating product with data:', productData);
       console.log('Files received:', req.files?.length || 0);
-
-      // Find or create category
-      let categoryId = productData.category;
-      if (typeof productData.category === 'string' && !productData.category.match(/^[0-9a-fA-F]{24}$/)) {
-        // Category is a name, find or create it
-        let category = await Category.findOne({ name: productData.category });
-        if (!category) {
-          category = new Category({ 
-            name: productData.category,
-            description: `${productData.category} collection`
-          });
-          await category.save();
-          console.log('Created new category:', category.name);
-        }
-        categoryId = category._id;
-      }
 
       // Handle image uploads
       let uploadedImages = [];
@@ -216,41 +139,30 @@ const productController = {
         }];
       }
 
-      // Parse sizes and colors if they come as strings
-      if (typeof productData.sizes === 'string') {
-        try {
-          productData.sizes = JSON.parse(productData.sizes);
-        } catch (e) {
-          productData.sizes = [{ size: 'M', quantity: 10 }];
-        }
-      }
-
+      // Parse colors if they come as strings
       if (typeof productData.colors === 'string') {
         try {
           productData.colors = JSON.parse(productData.colors);
         } catch (e) {
-          productData.colors = [{ name: 'Black', hexCode: '#000000' }];
+          productData.colors = [{ name: 'Default', hexCode: '#000000' }];
         }
       }
 
-      // Parse care instructions if it's a string
-      if (typeof productData.careInstructions === 'string') {
-        productData.careInstructions = productData.careInstructions
-          .split('\n')
-          .filter(instruction => instruction.trim())
-          .map(instruction => instruction.trim());
+      // Convert boolean strings to actual booleans
+      if (typeof productData.isNewArrival === 'string') {
+        productData.isNewArrival = productData.isNewArrival === 'true';
+      }
+
+      if (typeof productData.isSale === 'string') {
+        productData.isSale = productData.isSale === 'true';
       }
 
       // Set final data
-      productData.category = categoryId;
       productData.images = uploadedImages;
 
       // Create product
       const product = new Product(productData);
       await product.save();
-
-      // Populate category information
-      await product.populate('category', 'name slug');
 
       console.log('Product created successfully:', product.name);
 
@@ -283,10 +195,32 @@ const productController = {
   async updateProduct(req, res) {
     try {
       const productData = req.body;
+      console.log('Updating product with data:', productData);
+
+      // Handle existing images
+      let finalImages = [];
+      
+      // Parse existing images if provided
+      if (productData.existingImages) {
+        try {
+          const existingImages = typeof productData.existingImages === 'string' 
+            ? JSON.parse(productData.existingImages) 
+            : productData.existingImages;
+          
+          finalImages = existingImages.map((url, index) => ({
+            url,
+            alt: productData.name || `Product image ${index + 1}`,
+            isPrimary: index === 0
+          }));
+        } catch (e) {
+          console.error('Error parsing existing images:', e);
+        }
+      }
 
       // Handle new image uploads
       if (req.files && req.files.length > 0) {
         try {
+          console.log('Uploading', req.files.length, 'new images to Cloudinary...');
           const imagePromises = req.files.map(file => 
             uploadToCloudinary(file.buffer, 'products')
           );
@@ -294,35 +228,26 @@ const productController = {
           
           const newImages = cloudinaryResults.map((result, index) => ({
             url: result.secure_url,
-            alt: productData.name || `Product image ${index + 1}`,
-            isPrimary: index === 0
+            alt: productData.name || `Product image ${finalImages.length + index + 1}`,
+            isPrimary: finalImages.length === 0 && index === 0
           }));
 
-          // Merge with existing images if keepExisting is true
-          if (productData.keepExistingImages === 'true') {
-            const existingProduct = await Product.findById(req.params.id);
-            productData.images = [...existingProduct.images, ...newImages];
-          } else {
-            productData.images = newImages;
-          }
+          finalImages = [...finalImages, ...newImages];
         } catch (uploadError) {
           console.error('Image upload error:', uploadError);
           return res.status(400).json({
             status: 'error',
-            message: 'Failed to upload images'
+            message: 'Failed to upload images: ' + uploadError.message
           });
         }
       }
 
-      // Parse JSON strings if needed
-      if (typeof productData.sizes === 'string') {
-        try {
-          productData.sizes = JSON.parse(productData.sizes);
-        } catch (e) {
-          delete productData.sizes;
-        }
+      // Set images if we have any
+      if (finalImages.length > 0) {
+        productData.images = finalImages;
       }
 
+      // Parse colors if they come as strings
       if (typeof productData.colors === 'string') {
         try {
           productData.colors = JSON.parse(productData.colors);
@@ -331,18 +256,23 @@ const productController = {
         }
       }
 
-      if (typeof productData.careInstructions === 'string') {
-        productData.careInstructions = productData.careInstructions
-          .split('\n')
-          .filter(instruction => instruction.trim())
-          .map(instruction => instruction.trim());
+      // Convert boolean strings to actual booleans
+      if (typeof productData.isNewArrival === 'string') {
+        productData.isNewArrival = productData.isNewArrival === 'true';
       }
+
+      if (typeof productData.isSale === 'string') {
+        productData.isSale = productData.isSale === 'true';
+      }
+
+      // Remove existingImages from update data
+      delete productData.existingImages;
 
       const product = await Product.findByIdAndUpdate(
         req.params.id,
         productData,
         { new: true, runValidators: true }
-      ).populate('category', 'name slug');
+      );
 
       if (!product) {
         return res.status(404).json({
@@ -350,6 +280,8 @@ const productController = {
           message: 'Product not found'
         });
       }
+
+      console.log('Product updated successfully:', product.name);
 
       res.json({
         status: 'success',
@@ -370,7 +302,7 @@ const productController = {
 
       res.status(500).json({
         status: 'error',
-        message: 'Internal server error'
+        message: 'Internal server error: ' + error.message
       });
     }
   },
@@ -400,16 +332,12 @@ const productController = {
     }
   },
 
-  // Get featured products
-  async getFeaturedProducts(req, res) {
+  // Get new arrivals
+  async getNewArrivals(req, res) {
     try {
       const { limit = 10 } = req.query;
 
-      const products = await Product.find({ 
-        featured: true, 
-        status: 'active' 
-      })
-        .populate('category', 'name slug')
+      const products = await Product.find({ isNewArrival: true })
         .sort('-createdAt')
         .limit(Number(limit))
         .lean();
@@ -419,7 +347,30 @@ const productController = {
         data: { products }
       });
     } catch (error) {
-      console.error('Get featured products error:', error);
+      console.error('Get new arrivals error:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Internal server error'
+      });
+    }
+  },
+
+  // Get sale products
+  async getSaleProducts(req, res) {
+    try {
+      const { limit = 10 } = req.query;
+
+      const products = await Product.find({ isSale: true })
+        .sort('-createdAt')
+        .limit(Number(limit))
+        .lean();
+
+      res.json({
+        status: 'success',
+        data: { products }
+      });
+    } catch (error) {
+      console.error('Get sale products error:', error);
       res.status(500).json({
         status: 'error',
         message: 'Internal server error'
@@ -430,7 +381,7 @@ const productController = {
   // Search products
   async searchProducts(req, res) {
     try {
-      const { q, page = 1, limit = 20 } = req.query;
+      const { q, page = 1, limit = 20, size, material, isNewArrival, isSale } = req.query;
 
       if (!q) {
         return res.status(400).json({
@@ -442,17 +393,22 @@ const productController = {
       const filter = {
         $or: [
           { name: { $regex: q, $options: 'i' } },
-          { description: { $regex: q, $options: 'i' } }
-        ],
-        status: 'active'
+          { description: { $regex: q, $options: 'i' } },
+          { material: { $regex: q, $options: 'i' } }
+        ]
       };
+
+      // Add additional filters
+      if (size && size !== 'all') filter.size = size;
+      if (material) filter.material = { $regex: material, $options: 'i' };
+      if (isNewArrival !== undefined) filter.isNewArrival = isNewArrival === 'true';
+      if (isSale !== undefined) filter.isSale = isSale === 'true';
 
       const skip = (page - 1) * limit;
       const total = await Product.countDocuments(filter);
       const totalPages = Math.ceil(total / limit);
 
       const products = await Product.find(filter)
-        .populate('category', 'name slug')
         .sort('-createdAt')
         .skip(skip)
         .limit(Number(limit))
@@ -474,136 +430,6 @@ const productController = {
       });
     } catch (error) {
       console.error('Search products error:', error);
-      res.status(500).json({
-        status: 'error',
-        message: 'Internal server error'
-      });
-    }
-  },
-
-  // Update product status
-  async updateProductStatus(req, res) {
-    try {
-      const { status } = req.body;
-
-      if (!['active', 'inactive', 'draft'].includes(status)) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Invalid status value'
-        });
-      }
-
-      const product = await Product.findByIdAndUpdate(
-        req.params.id,
-        { status },
-        { new: true }
-      );
-
-      if (!product) {
-        return res.status(404).json({
-          status: 'error',
-          message: 'Product not found'
-        });
-      }
-
-      res.json({
-        status: 'success',
-        message: 'Product status updated successfully',
-        data: { product }
-      });
-    } catch (error) {
-      console.error('Update product status error:', error);
-      res.status(500).json({
-        status: 'error',
-        message: 'Internal server error'
-      });
-    }
-  },
-
-  // Toggle featured status
-  async toggleFeatured(req, res) {
-    try {
-      const product = await Product.findById(req.params.id);
-
-      if (!product) {
-        return res.status(404).json({
-          status: 'error',
-          message: 'Product not found'
-        });
-      }
-
-      product.featured = !product.featured;
-      await product.save();
-
-      res.json({
-        status: 'success',
-        message: `Product ${product.featured ? 'featured' : 'unfeatured'} successfully`,
-        data: { product }
-      });
-    } catch (error) {
-      console.error('Toggle featured error:', error);
-      res.status(500).json({
-        status: 'error',
-        message: 'Internal server error'
-      });
-    }
-  },
-
-  // Update inventory
-  async updateInventory(req, res) {
-    try {
-      const { quantity, lowStockThreshold } = req.body;
-
-      const updateData = {};
-      if (quantity !== undefined) updateData.quantity = quantity;
-      if (lowStockThreshold !== undefined) updateData.lowStockThreshold = lowStockThreshold;
-
-      const product = await Product.findByIdAndUpdate(
-        req.params.id,
-        updateData,
-        { new: true }
-      );
-
-      if (!product) {
-        return res.status(404).json({
-          status: 'error',
-          message: 'Product not found'
-        });
-      }
-
-      res.json({
-        status: 'success',
-        message: 'Inventory updated successfully',
-        data: { product }
-      });
-    } catch (error) {
-      console.error('Update inventory error:', error);
-      res.status(500).json({
-        status: 'error',
-        message: 'Internal server error'
-      });
-    }
-  },
-
-  // Get inventory
-  async getInventory(req, res) {
-    try {
-      const product = await Product.findById(req.params.id)
-        .select('name sizes totalQuantity');
-
-      if (!product) {
-        return res.status(404).json({
-          status: 'error',
-          message: 'Product not found'
-        });
-      }
-
-      res.json({
-        status: 'success',
-        data: { inventory: product }
-      });
-    } catch (error) {
-      console.error('Get inventory error:', error);
       res.status(500).json({
         status: 'error',
         message: 'Internal server error'

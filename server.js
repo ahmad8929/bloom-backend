@@ -14,9 +14,7 @@ require('dotenv').config();
 // Import core routes only
 const authRoutes = require('./routes/auth');
 const productRoutes = require('./routes/products');
-const categoryRoutes = require('./routes/categories');
 const cartRoutes = require('./routes/cart');
-const wishlistRoutes = require('./routes/wishlist');
 const orderRoutes = require('./routes/orders');
 const adminRoutes = require('./routes/admin');
 
@@ -81,9 +79,7 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 // Core API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/products', productRoutes);
-app.use('/api/categories', categoryRoutes);
 app.use('/api/cart', cartRoutes);
-app.use('/api/wishlist', wishlistRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/admin', adminRoutes);
 
@@ -107,36 +103,11 @@ const server = app.listen(PORT, () => console.log(`Server running on port ${PORT
 mongoose.connect(process.env.MONGODB_URI)
 .then(() => {
   console.log('Connected to MongoDB');
-  // Initialize default categories
-  initializeCategories();
 })
 .catch(err => {
   console.error('MongoDB connection error:', err);
   process.exit(1);
 });
-
-// Initialize default categories
-async function initializeCategories() {
-  try {
-    const Category = require('./models/Category');
-    const existingCategories = await Category.countDocuments();
-    
-    if (existingCategories === 0) {
-      const defaultCategories = [
-        { name: 'Dresses', slug: 'dresses', description: 'Beautiful dresses for every occasion' },
-        { name: 'Tops', slug: 'tops', description: 'Stylish tops and blouses' },
-        { name: 'Bottoms', slug: 'bottoms', description: 'Pants, skirts, and shorts' },
-        { name: 'Outerwear', slug: 'outerwear', description: 'Jackets and coats' },
-        { name: 'Accessories', slug: 'accessories', description: 'Bags, jewelry, and more' }
-      ];
-      
-      await Category.insertMany(defaultCategories);
-      console.log('Default categories created');
-    }
-  } catch (error) {
-    console.log('Categories already exist or error creating them:', error.message);
-  }
-}
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (err) => {
