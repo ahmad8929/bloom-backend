@@ -1,50 +1,62 @@
 const mongoose = require('mongoose');
 
+const cartItemSchema = new mongoose.Schema({
+  productId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Product',
+    required: true
+  },
+  product: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Product',
+    required: true
+  },
+  quantity: {
+    type: Number,
+    required: true,
+    min: 1,
+    default: 1
+  },
+  size: {
+    type: String,
+    required: false
+  }
+}, { _id: true });
+
 const cartSchema = new mongoose.Schema({
-  user: {
+  userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
   },
-  items: [{
-    product: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'Product',
-      required: true
-    },
-    size: {
-      type: String,
-      required: true,
-      enum: ['XS', 'S', 'M', 'L', 'XL', 'XXL']
-    },
-    color: {
-      name: String,
-      hexCode: String
-    },
-    quantity: {
-      type: Number,
-      required: true,
-      min: 1,
-      default: 1
-    },
-    price: {
-      type: Number,
-      required: true
-    }
-  }],
-  totals: {
-    subtotal: { type: Number, default: 0 },
-    shipping: { type: Number, default: 0 },
-    total: { type: Number, default: 0 }
+  items: [cartItemSchema],
+  totalItems: {
+    type: Number,
+    default: 0
+  },
+  totalAmount: {
+    type: Number,
+    default: 0
   }
 }, {
   timestamps: true
 });
 
 // Calculate totals before saving
-cartSchema.pre('save', function(next) {
-  this.totals.subtotal = this.items.reduce((total, item) => total + (item.price * item.quantity), 0);
-  this.totals.total = this.totals.subtotal + this.totals.shipping;
+cartSchema.pre('save', async function(next) {
+  if (this.items && this.items.length > 0) {
+    // Populate products to calculate totals
+    await this.populate('items.product');
+    
+    this.totalItems = this.items.reduce((total, item) => total + item.quantity, 0);
+    this.totalAmount = this.items.reduce((total, item) => {
+      const price = item.product ? item.product.price : 0;
+      return total + (price * item.quantity);
+    }, 0);
+  } else {
+    this.totalItems = 0;
+    this.totalAmount = 0;
+  }
   next();
 });
 
