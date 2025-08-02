@@ -56,7 +56,6 @@ const createRateLimit = (options = {}) => {
                           req.get('host')?.includes('localhost');
         
         if (isLocalhost) {
-          console.log(`🚀 Rate limit skipped for localhost: ${req.method} ${req.path}`);
           return true;
         }
       }
@@ -64,7 +63,6 @@ const createRateLimit = (options = {}) => {
       // Skip for trusted IPs (if configured)
       const trustedIPs = process.env.TRUSTED_IPS?.split(',') || [];
       if (trustedIPs.includes(req.ip)) {
-        console.log(`✅ Rate limit skipped for trusted IP: ${req.ip}`);
         return true;
       }
       
@@ -93,12 +91,16 @@ const createRateLimit = (options = {}) => {
         userId: req.user?.id || 'anonymous'
       };
       
-      console.warn(`⚠️  Rate limit exceeded:`, {
-        ...clientInfo,
-        endpoint,
-        limit: maxRequests,
-        window: `${windowMs / 1000}s`
-      });
+      // Only log in production or when specifically enabled
+      if (process.env.NODE_ENV === 'production' || process.env.RATE_LIMIT_LOGGING === 'true') {
+        console.warn(`⚠️  Rate limit exceeded:`, {
+          ...clientInfo,
+          endpoint,
+          limit: maxRequests,
+          window: `${windowMs / 1000}s`,
+          timestamp: new Date().toISOString()
+        });
+      }
       
       // Set retry-after header
       res.set('Retry-After', Math.ceil(windowMs / 1000));
@@ -117,18 +119,16 @@ const createRateLimit = (options = {}) => {
         },
         timestamp: new Date().toISOString()
       });
-    },
-    
-    // Log when someone is approaching the limit (at 80%)
-    onLimitReached: (req, res, options) => {
-      console.warn(`🔥 Rate limit almost reached (80%): ${req.ip} on ${req.path}`);
     }
+    
+    // REMOVED: onLimitReached option (deprecated in v7)
+    // The functionality has been moved to the handler above
   });
 };
 
-// Define all rate limiters with your requested generous limits
+// Define all rate limiters with production-ready configurations
 const rateLimiters = {
-  // General API rate limit - 1000 requests per 10 minutes as requested
+  // General API rate limit - 1000 requests per 10 minutes
   general: createRateLimit({
     windowMs: 10 * 60 * 1000, // 10 minutes
     maxRequests: 1000,
@@ -136,10 +136,10 @@ const rateLimiters = {
     endpoint: 'general'
   }),
   
-  // Authentication endpoints - more restrictive to prevent brute force
+  // Authentication endpoints - prevent brute force attacks
   auth: createRateLimit({
-    windowMs: 10 * 60 * 1000, // 10 minutes
-    maxRequests: 50, // 50 login attempts per 10 minutes
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    maxRequests: 50, // 50 login attempts per 15 minutes
     message: 'Too many authentication attempts, please try again later',
     skipSuccessfulRequests: true, // Don't count successful logins against the limit
     endpoint: 'auth'
@@ -156,15 +156,15 @@ const rateLimiters = {
   // Admin endpoints - moderate restriction
   admin: createRateLimit({
     windowMs: 10 * 60 * 1000, // 10 minutes
-    maxRequests: 1000, // 200 admin actions per 10 minutes
+    maxRequests: 200, // 200 admin actions per 10 minutes
     message: 'Too many admin requests, please try again later',
     endpoint: 'admin'
   }),
   
-  // File upload endpoints
+  // File upload endpoints - prevent abuse
   upload: createRateLimit({
     windowMs: 60 * 60 * 1000, // 1 hour
-    maxRequests: 200, // 50 uploads per hour
+    maxRequests: 50, // 50 uploads per hour
     message: 'Too many file uploads, please try again later',
     endpoint: 'upload'
   }),
@@ -177,10 +177,10 @@ const rateLimiters = {
     endpoint: 'password-reset'
   }),
   
-  // Products endpoint - very generous for browsing
+  // Products endpoint - generous for browsing
   products: createRateLimit({
     windowMs: 10 * 60 * 1000, // 10 minutes
-    maxRequests: 3000, // 2000 product requests per 10 minutes
+    maxRequests: 2000, // 2000 product requests per 10 minutes
     message: 'Too many product requests, please try again later',
     endpoint: 'products'
   }),
@@ -188,7 +188,7 @@ const rateLimiters = {
   // Cart operations - generous for good UX
   cart: createRateLimit({
     windowMs: 10 * 60 * 1000, // 10 minutes
-    maxRequests: 1000, // 500 cart operations per 10 minutes
+    maxRequests: 500, // 500 cart operations per 10 minutes
     message: 'Too many cart operations, please try again later',
     endpoint: 'cart'
   })
@@ -198,15 +198,35 @@ const rateLimiters = {
 const getRateLimiter = (name) => {
   const limiter = rateLimiters[name];
   if (!limiter) {
-    console.warn(`⚠️  Unknown rate limiter: ${name}, using general limiter`);
+    if (process.env.NODE_ENV === 'production') {
+      console.warn(`⚠️  Unknown rate limiter: ${name}, using general limiter`);
+    }
     return rateLimiters.general;
   }
   return limiter;
+};
+
+// Production-ready logging function
+const logRateLimitInfo = () => {
+  if (process.env.NODE_ENV === 'production') {
+    console.log('🛡️  Rate limiting enabled for production');
+    console.log('📊 Rate limit configuration:');
+    Object.entries(rateLimiters).forEach(([name, limiter]) => {
+      // Access the configuration from the limiter options
+      const config = limiter.options || {};
+      const requests = config.max || 'N/A';
+      const window = config.windowMs ? `${config.windowMs / 60000}min` : 'N/A';
+      console.log(`   • ${name}: ${requests} requests/${window}`);
+    });
+  } else {
+    console.log('🛡️  Rate limiting disabled for development (localhost only)');
+  }
 };
 
 // Export rate limiters and utility functions
 module.exports = {
   createRateLimit,
   rateLimiters,
-  getRateLimiter
+  getRateLimiter,
+  logRateLimitInfo
 };

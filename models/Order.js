@@ -1,10 +1,9 @@
-// models/Order.js
 const mongoose = require('mongoose');
 
 const orderSchema = new mongoose.Schema({
   orderNumber: {
     type: String,
-    unique: true
+    unique: true // REMOVE THIS LINE - it creates duplicate index
   },
   user: {
     type: mongoose.Schema.Types.ObjectId,
@@ -151,11 +150,11 @@ orderSchema.virtual('userOrderCategory').get(function() {
   }
 });
 
-// Indexes
+// Indexes - Define all indexes here (no duplicates)
 orderSchema.index({ user: 1, createdAt: -1 });
 orderSchema.index({ status: 1 });
 orderSchema.index({ 'adminApproval.status': 1 });
-orderSchema.index({ orderNumber: 1 }, { unique: true });
+orderSchema.index({ orderNumber: 1 }, { unique: true }); // Only define unique index here
 orderSchema.index({ createdAt: -1 });
 orderSchema.index({ paymentStatus: 1 });
 
