@@ -3,8 +3,8 @@ const mongoose = require('mongoose');
 
 const orderSchema = new mongoose.Schema({
   orderNumber: {
-    type: String
-    // Removed unique: true to avoid duplicate index warning
+    type: String,
+    unique: true
   },
   user: {
     type: mongoose.Schema.Types.ObjectId,
@@ -13,6 +13,11 @@ const orderSchema = new mongoose.Schema({
   },
   items: [{
     product: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Product',
+      required: true
+    },
+    productId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Product',
       required: true
@@ -27,33 +32,22 @@ const orderSchema = new mongoose.Schema({
       required: true
     },
     size: String,
-    color: String,
     name: String,
     image: String
   }],
   shippingAddress: {
-    firstName: { type: String, required: true },
-    lastName: { type: String, required: true },
-    street: { type: String, required: true },
+    fullName: { type: String, required: true },
+    email: { type: String, required: true },
+    phone: { type: String, required: true },
+    address: { type: String, required: true },
     city: { type: String, required: true },
     state: { type: String, required: true },
-    zipCode: { type: String, required: true },
-    country: { type: String, default: 'USA' },
-    phone: String
-  },
-  billingAddress: {
-    firstName: String,
-    lastName: String,
-    street: String,
-    city: String,
-    state: String,
-    zipCode: String,
-    country: { type: String, default: 'USA' },
-    phone: String
+    pincode: { type: String, required: true },
+    nearbyPlaces: String
   },
   paymentMethod: {
     type: String,
-    enum: ['credit_card', 'debit_card', 'paypal', 'stripe', 'cash_on_delivery'],
+    enum: ['upi', 'card', 'cod'],
     required: true
   },
   paymentStatus: {
@@ -61,10 +55,40 @@ const orderSchema = new mongoose.Schema({
     enum: ['pending', 'completed', 'failed', 'refunded'],
     default: 'pending'
   },
+  paymentDetails: {
+    payerName: String,
+    transactionId: String,
+    paymentDate: String,
+    paymentTime: String,
+    amount: Number,
+    paymentProof: {
+      url: String,
+      publicId: String,
+      uploadedAt: { type: Date, default: Date.now }
+    }
+  },
   status: {
     type: String,
-    enum: ['pending', 'processing', 'shipped', 'delivered', 'cancelled'],
+    enum: ['pending', 'awaiting_approval', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled', 'rejected'],
     default: 'pending'
+  },
+  adminApproval: {
+    status: {
+      type: String,
+      enum: ['pending', 'approved', 'rejected'],
+      default: 'pending'
+    },
+    approvedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    approvedAt: Date,
+    rejectedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    rejectedAt: Date,
+    remarks: String
   },
   subtotal: {
     type: Number,
@@ -82,7 +106,7 @@ const orderSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
-  total: {
+  totalAmount: {
     type: Number,
     required: true
   },
@@ -92,11 +116,17 @@ const orderSchema = new mongoose.Schema({
   estimatedDelivery: Date,
   deliveredAt: Date,
   cancelledAt: Date,
+  rejectedAt: Date,
   cancelReason: String,
+  rejectReason: String,
   timeline: [{
     status: String,
     note: String,
-    timestamp: { type: Date, default: Date.now }
+    timestamp: { type: Date, default: Date.now },
+    updatedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    }
   }]
 }, {
   timestamps: true
@@ -105,15 +135,28 @@ const orderSchema = new mongoose.Schema({
 // Generate order number before saving
 orderSchema.pre('save', function(next) {
   if (this.isNew && !this.orderNumber) {
-    this.orderNumber = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+    this.orderNumber = `BT-${Date.now()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
   }
   next();
 });
 
-// Indexes (define only once and create unique index for orderNumber)
+// Virtual for user order status categorization
+orderSchema.virtual('userOrderCategory').get(function() {
+  if (['cancelled', 'rejected'].includes(this.status)) {
+    return 'cancelled';
+  } else if (['delivered'].includes(this.status)) {
+    return 'completed';
+  } else {
+    return 'ongoing';
+  }
+});
+
+// Indexes
 orderSchema.index({ user: 1, createdAt: -1 });
 orderSchema.index({ status: 1 });
-orderSchema.index({ orderNumber: 1 }, { unique: true }); // Single unique index
+orderSchema.index({ 'adminApproval.status': 1 });
+orderSchema.index({ orderNumber: 1 }, { unique: true });
 orderSchema.index({ createdAt: -1 });
+orderSchema.index({ paymentStatus: 1 });
 
 module.exports = mongoose.model('Order', orderSchema);

@@ -1,61 +1,69 @@
 // controllers/adminController.js
+const Order = require('../models/Order');
 const User = require('../models/User');
 const Product = require('../models/Product');
-const Order = require('../models/Order');
 
 const adminController = {
   // Get dashboard statistics
   async getDashboardStats(req, res) {
     try {
       const [
+        totalOrders,
+        pendingApprovals,
         totalUsers,
         totalProducts,
-        totalOrders,
-        totalRevenue,
         recentOrders,
-        verifiedUsers,
-        unverifiedUsers
+        orderStats,
+        revenueStats
       ] = await Promise.all([
-        User.countDocuments({ role: 'user' }),
-        Product.countDocuments({ status: 'active' }),
         Order.countDocuments(),
-        Order.aggregate([
-          { $match: { status: { $in: ['delivered', 'completed'] } } },
-          { $group: { _id: null, total: { $sum: '$total' } } }
-        ]),
+        Order.countDocuments({ 'adminApproval.status': 'pending' }),
+        User.countDocuments({ role: 'user' }),
+        Product.countDocuments(),
         Order.find()
           .populate('user', 'firstName lastName email')
+          .populate('items.product', 'name images')
           .sort('-createdAt')
           .limit(5)
           .lean(),
-        User.countDocuments({ role: 'user', emailVerified: true }),
-        User.countDocuments({ role: 'user', emailVerified: false })
+        Order.aggregate([
+          {
+            $group: {
+              _id: '$status',
+              count: { $sum: 1 }
+            }
+          }
+        ]),
+        Order.aggregate([
+          {
+            $match: { status: 'delivered' }
+          },
+          {
+            $group: {
+              _id: null,
+              totalRevenue: { $sum: '$totalAmount' },
+              averageOrderValue: { $avg: '$totalAmount' }
+            }
+          }
+        ])
       ]);
 
-      const revenue = totalRevenue[0]?.total || 0;
+      const stats = {
+        totalOrders,
+        pendingApprovals,
+        totalUsers,
+        totalProducts,
+        recentOrders,
+        ordersByStatus: orderStats.reduce((acc, stat) => {
+          acc[stat._id] = stat.count;
+          return acc;
+        }, {}),
+        revenue: revenueStats[0] || { totalRevenue: 0, averageOrderValue: 0 }
+      };
 
       res.json({
         status: 'success',
-        data: {
-          stats: {
-            totalUsers,
-            totalProducts,
-            totalOrders,
-            totalRevenue: revenue,
-            verifiedUsers,
-            unverifiedUsers
-          },
-          recentOrders: recentOrders.map(order => ({
-            id: order._id,
-            orderNumber: order.orderNumber || `ORD-${order._id.toString().slice(-6).toUpperCase()}`,
-            customerName: order.user ? `${order.user.firstName} ${order.user.lastName}` : 'Guest',
-            customerEmail: order.user?.email || 'N/A',
-            status: order.status,
-            total: order.total || 0,
-            items: order.items?.length || 0,
-            createdAt: order.createdAt
-          }))
-        }
+        data: { stats }
       });
     } catch (error) {
       console.error('Get dashboard stats error:', error);
@@ -66,17 +74,12 @@ const adminController = {
     }
   },
 
-  // Get all customers (users)
+  // Get all customers
   async getCustomers(req, res) {
     try {
-      const { page = 1, limit = 20, search, emailVerified } = req.query;
+      const { page = 1, limit = 20, search } = req.query;
 
       const filter = { role: 'user' };
-      
-      if (emailVerified !== undefined) {
-        filter.emailVerified = emailVerified === 'true';
-      }
-      
       if (search) {
         filter.$or = [
           { firstName: { $regex: search, $options: 'i' } },
@@ -96,31 +99,19 @@ const adminController = {
         .limit(Number(limit))
         .lean();
 
-      // Get order stats for each customer
+      // Get order count for each customer
       const customersWithStats = await Promise.all(
         customers.map(async (customer) => {
-          const orderStats = await Order.aggregate([
-            { $match: { user: customer._id } },
-            {
-              $group: {
-                _id: null,
-                totalOrders: { $sum: 1 },
-                totalSpent: { $sum: '$total' }
-              }
-            }
+          const orderCount = await Order.countDocuments({ user: customer._id });
+          const totalSpent = await Order.aggregate([
+            { $match: { user: customer._id, status: 'delivered' } },
+            { $group: { _id: null, total: { $sum: '$totalAmount' } } }
           ]);
 
           return {
-            id: customer._id,
-            firstName: customer.firstName,
-            lastName: customer.lastName,
-            email: customer.email,
-            emailVerified: customer.emailVerified,
-            role: customer.role,
-            totalOrders: orderStats[0]?.totalOrders || 0,
-            totalSpent: orderStats[0]?.totalSpent || 0,
-            createdAt: customer.createdAt,
-            lastLoginAt: customer.lastLogin
+            ...customer,
+            orderCount,
+            totalSpent: totalSpent[0]?.total || 0
           };
         })
       );
@@ -148,14 +139,15 @@ const adminController = {
     }
   },
 
-  // Toggle email verification
+  // Toggle email verification status
   async toggleEmailVerification(req, res) {
     try {
-      const { emailVerified } = req.body;
+      const { id } = req.params;
+      const { isEmailVerified } = req.body;
 
       const user = await User.findByIdAndUpdate(
-        req.params.id,
-        { emailVerified },
+        id,
+        { isEmailVerified },
         { new: true }
       ).select('-password');
 
@@ -168,7 +160,7 @@ const adminController = {
 
       res.json({
         status: 'success',
-        message: `Email ${emailVerified ? 'verified' : 'unverified'} successfully`,
+        message: `Email verification ${isEmailVerified ? 'enabled' : 'disabled'} for user`,
         data: { user }
       });
     } catch (error) {
@@ -183,6 +175,7 @@ const adminController = {
   // Update user role
   async updateUserRole(req, res) {
     try {
+      const { id } = req.params;
       const { role } = req.body;
 
       if (!['user', 'admin'].includes(role)) {
@@ -193,7 +186,7 @@ const adminController = {
       }
 
       const user = await User.findByIdAndUpdate(
-        req.params.id,
+        id,
         { role },
         { new: true }
       ).select('-password');
@@ -207,7 +200,7 @@ const adminController = {
 
       res.json({
         status: 'success',
-        message: 'User role updated successfully',
+        message: `User role updated to ${role}`,
         data: { user }
       });
     } catch (error) {
@@ -219,29 +212,38 @@ const adminController = {
     }
   },
 
-  // Get all orders
+  // Get all orders for admin with detailed filters
   async getOrders(req, res) {
     try {
-      const { page = 1, limit = 20, status, search } = req.query;
+      const { 
+        page = 1, 
+        limit = 20, 
+        status, 
+        paymentStatus,
+        approvalStatus,
+        startDate,
+        endDate,
+        search,
+        userId
+      } = req.query;
 
       const filter = {};
-      if (status && status !== 'all') {
-        filter.status = status;
-      }
+      if (status) filter.status = status;
+      if (paymentStatus) filter.paymentStatus = paymentStatus;
+      if (approvalStatus) filter['adminApproval.status'] = approvalStatus;
+      if (userId) filter.user = userId;
       
+      if (startDate || endDate) {
+        filter.createdAt = {};
+        if (startDate) filter.createdAt.$gte = new Date(startDate);
+        if (endDate) filter.createdAt.$lte = new Date(endDate);
+      }
+
       if (search) {
-        const users = await User.find({
-          $or: [
-            { firstName: { $regex: search, $options: 'i' } },
-            { lastName: { $regex: search, $options: 'i' } },
-            { email: { $regex: search, $options: 'i' } }
-          ]
-        }).select('_id');
-        
-        const userIds = users.map(user => user._id);
         filter.$or = [
-          { user: { $in: userIds } },
-          { orderNumber: { $regex: search, $options: 'i' } }
+          { orderNumber: { $regex: search, $options: 'i' } },
+          { 'shippingAddress.fullName': { $regex: search, $options: 'i' } },
+          { 'shippingAddress.email': { $regex: search, $options: 'i' } }
         ];
       }
 
@@ -251,27 +253,21 @@ const adminController = {
 
       const orders = await Order.find(filter)
         .populate('user', 'firstName lastName email')
+        .populate({
+          path: 'items.product',
+          select: 'name images price'
+        })
+        .populate('adminApproval.approvedBy', 'firstName lastName')
+        .populate('adminApproval.rejectedBy', 'firstName lastName')
         .sort('-createdAt')
         .skip(skip)
         .limit(Number(limit))
         .lean();
 
-      const formattedOrders = orders.map(order => ({
-        id: order._id,
-        orderNumber: order.orderNumber || `ORD-${order._id.toString().slice(-6).toUpperCase()}`,
-        customerName: order.user ? `${order.user.firstName} ${order.user.lastName}` : 'Guest',
-        customerEmail: order.user?.email || 'N/A',
-        status: order.status,
-        total: order.total || 0,
-        items: order.items?.length || 0,
-        createdAt: order.createdAt,
-        shippingAddress: order.shippingAddress || {}
-      }));
-
       res.json({
         status: 'success',
         data: {
-          orders: formattedOrders,
+          orders,
           pagination: {
             page: Number(page),
             limit: Number(limit),
@@ -291,24 +287,21 @@ const adminController = {
     }
   },
 
-  // Update order status
-  async updateOrderStatus(req, res) {
+  // Get single order with full details
+  async getOrder(req, res) {
     try {
-      const { status } = req.body;
-      const validStatuses = ['pending', 'processing', 'shipped', 'delivered', 'cancelled'];
-
-      if (!validStatuses.includes(status)) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Invalid order status'
+      const order = await Order.findById(req.params.id)
+        .populate('user', 'firstName lastName email phone')
+        .populate({
+          path: 'items.product',
+          select: 'name images price size material'
+        })
+        .populate('adminApproval.approvedBy', 'firstName lastName')
+        .populate('adminApproval.rejectedBy', 'firstName lastName')
+        .populate({
+          path: 'timeline.updatedBy',
+          select: 'firstName lastName'
         });
-      }
-
-      const order = await Order.findByIdAndUpdate(
-        req.params.id,
-        { status, updatedAt: new Date() },
-        { new: true }
-      ).populate('user', 'firstName lastName email');
 
       if (!order) {
         return res.status(404).json({
@@ -316,6 +309,185 @@ const adminController = {
           message: 'Order not found'
         });
       }
+
+      res.json({
+        status: 'success',
+        data: { order }
+      });
+    } catch (error) {
+      console.error('Get order error:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Internal server error'
+      });
+    }
+  },
+
+  // Approve order
+  async approveOrder(req, res) {
+    try {
+      const { remarks } = req.body;
+      const order = await Order.findById(req.params.id);
+
+      if (!order) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Order not found'
+        });
+      }
+
+      if (order.adminApproval.status !== 'pending') {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Order has already been processed'
+        });
+      }
+
+      order.adminApproval.status = 'approved';
+      order.adminApproval.approvedBy = req.user.id;
+      order.adminApproval.approvedAt = new Date();
+      order.adminApproval.remarks = remarks;
+      order.status = 'confirmed';
+
+      order.timeline.push({
+        status: 'confirmed',
+        note: `Order approved by admin. ${remarks ? `Remarks: ${remarks}` : ''}`,
+        timestamp: new Date(),
+        updatedBy: req.user.id
+      });
+
+      await order.save();
+
+      // Update product quantities
+      for (const item of order.items) {
+        const product = await Product.findById(item.product);
+        if (product && product.trackQuantity) {
+          await Product.findByIdAndUpdate(item.product, {
+            $inc: { 
+              quantity: -item.quantity
+            }
+          });
+        }
+      }
+
+      await order.populate([
+        { path: 'user', select: 'firstName lastName email' },
+        { path: 'adminApproval.approvedBy', select: 'firstName lastName' }
+      ]);
+
+      res.json({
+        status: 'success',
+        message: 'Order approved successfully',
+        data: { order }
+      });
+    } catch (error) {
+      console.error('Approve order error:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Internal server error'
+      });
+    }
+  },
+
+  // Reject order
+  async rejectOrder(req, res) {
+    try {
+      const { remarks } = req.body;
+      
+      if (!remarks || remarks.trim() === '') {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Rejection reason is required'
+        });
+      }
+
+      const order = await Order.findById(req.params.id);
+
+      if (!order) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Order not found'
+        });
+      }
+
+      if (order.adminApproval.status !== 'pending') {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Order has already been processed'
+        });
+      }
+
+      order.adminApproval.status = 'rejected';
+      order.adminApproval.rejectedBy = req.user.id;
+      order.adminApproval.rejectedAt = new Date();
+      order.adminApproval.remarks = remarks;
+      order.status = 'rejected';
+      order.rejectedAt = new Date();
+      order.rejectReason = remarks;
+
+      order.timeline.push({
+        status: 'rejected',
+        note: `Order rejected by admin. Reason: ${remarks}`,
+        timestamp: new Date(),
+        updatedBy: req.user.id
+      });
+
+      await order.save();
+
+      await order.populate([
+        { path: 'user', select: 'firstName lastName email' },
+        { path: 'adminApproval.rejectedBy', select: 'firstName lastName' }
+      ]);
+
+      res.json({
+        status: 'success',
+        message: 'Order rejected successfully',
+        data: { order }
+      });
+    } catch (error) {
+      console.error('Reject order error:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Internal server error'
+      });
+    }
+  },
+
+  // Update order status
+  async updateOrderStatus(req, res) {
+    try {
+      const { status, note } = req.body;
+
+      const validStatuses = ['pending', 'awaiting_approval', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled', 'rejected'];
+      if (!validStatuses.includes(status)) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Invalid status'
+        });
+      }
+
+      const order = await Order.findById(req.params.id);
+      if (!order) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Order not found'
+        });
+      }
+
+      order.status = status;
+      order.timeline.push({
+        status,
+        note: note || `Order status updated to ${status} by admin`,
+        timestamp: new Date(),
+        updatedBy: req.user.id
+      });
+
+      if (status === 'delivered') {
+        order.deliveredAt = new Date();
+        order.paymentStatus = 'completed';
+      }
+
+      await order.save();
 
       res.json({
         status: 'success',
@@ -331,27 +503,45 @@ const adminController = {
     }
   },
 
-  // Get single order details
-  async getOrder(req, res) {
+  // Get orders by user
+  async getOrdersByUser(req, res) {
     try {
-      const order = await Order.findById(req.params.id)
-        .populate('user', 'firstName lastName email')
-        .populate('items.product', 'name price images')
+      const { userId } = req.params;
+      const { page = 1, limit = 10 } = req.query;
+
+      const skip = (page - 1) * limit;
+      const total = await Order.countDocuments({ user: userId });
+      const totalPages = Math.ceil(total / limit);
+
+      const orders = await Order.find({ user: userId })
+        .populate({
+          path: 'items.product',
+          select: 'name images price'
+        })
+        .sort('-createdAt')
+        .skip(skip)
+        .limit(Number(limit))
         .lean();
 
-      if (!order) {
-        return res.status(404).json({
-          status: 'error',
-          message: 'Order not found'
-        });
-      }
+      const user = await User.findById(userId).select('firstName lastName email');
 
       res.json({
         status: 'success',
-        data: { order }
+        data: {
+          user,
+          orders,
+          pagination: {
+            page: Number(page),
+            limit: Number(limit),
+            total,
+            totalPages,
+            hasNext: page < totalPages,
+            hasPrev: page > 1
+          }
+        }
       });
     } catch (error) {
-      console.error('Get order error:', error);
+      console.error('Get orders by user error:', error);
       res.status(500).json({
         status: 'error',
         message: 'Internal server error'
