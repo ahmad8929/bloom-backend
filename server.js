@@ -3,7 +3,6 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
 const compression = require('compression');
-const rateLimit = require('express-rate-limit');
 const mongoSanitize = require('express-mongo-sanitize');
 const xss = require('xss-clean');
 const morgan = require('morgan');
@@ -18,7 +17,9 @@ const cartRoutes = require('./routes/cart');
 const orderRoutes = require('./routes/orders');
 const adminRoutes = require('./routes/admin');
 
+// Import custom middleware
 const errorHandler = require('./middlewares/errorHandler');
+const { rateLimiters } = require('./middlewares/rateLimiter');
 
 const app = express();
 
@@ -29,6 +30,9 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
+// Trust proxy - important for rate limiting with reverse proxies
+app.set('trust proxy', 1);
+
 // Security middleware
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" }
@@ -36,12 +40,20 @@ app.use(helmet({
 app.use(mongoSanitize());
 app.use(xss());
 
-// Rate limiting
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
-});
-app.use('/api/', limiter);
+// Apply rate limiting before other middleware
+console.log(`🛡️  Setting up rate limiting for ${process.env.NODE_ENV} environment`);
+
+// Apply specific rate limits to specific endpoints
+app.use('/api/auth/login', rateLimiters.auth);
+app.use('/api/auth/register', rateLimiters.auth);
+app.use('/api/auth/forgot-password', rateLimiters.passwordReset);
+app.use('/api/auth/reset-password', rateLimiters.passwordReset);
+app.use('/api/orders/create', rateLimiters.orders);
+app.use('/api/admin', rateLimiters.admin);
+app.use('/api/upload', rateLimiters.upload);
+
+// General rate limit for all other API routes (should be last)
+app.use('/api/', rateLimiters.general);
 
 app.use(compression());
 
@@ -71,7 +83,7 @@ const corsOptions = {
     'Access-Control-Request-Method',
     'Access-Control-Request-Headers'
   ],
-  exposedHeaders: ['Content-Range', 'X-Content-Range']
+  exposedHeaders: ['Content-Range', 'X-Content-Range', 'X-RateLimit-Limit', 'X-RateLimit-Remaining']
 };
 
 app.use(cors(corsOptions));
@@ -95,13 +107,23 @@ app.use('/api/cart', cartRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/admin', adminRoutes);
 
-// Health check endpoint
+// Health check endpoint (no rate limiting)
 app.get('/api/health', (req, res) => {
   res.status(200).json({ 
     status: 'success',
     message: 'Server is healthy',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV
+    environment: process.env.NODE_ENV,
+    rateLimit: {
+      enabled: process.env.NODE_ENV === 'production' || process.env.RATE_LIMIT_ENABLED === 'true',
+      limits: {
+        general: '1000 requests per 10 minutes',
+        auth: '50 requests per 10 minutes',
+        orders: '100 requests per hour',
+        admin: '200 requests per 10 minutes',
+        passwordReset: '5 requests per hour'
+      }
+    }
   });
 });
 
@@ -133,6 +155,19 @@ const server = app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV}`);
   console.log(`🔗 API Base URL: http://localhost:${PORT}/api`);
+  
+  const rateLimitStatus = process.env.NODE_ENV === 'development' ? 
+    'DISABLED for localhost (dev mode)' : 'ENABLED';
+  console.log(`🛡️  Rate limiting: ${rateLimitStatus}`);
+  
+  if (process.env.NODE_ENV === 'development') {
+    console.log('📝 Rate limits (will be skipped for localhost):');
+    console.log('   • General API: 1000 requests/10min');
+    console.log('   • Authentication: 50 requests/10min');
+    console.log('   • Orders: 100 requests/hour');
+    console.log('   • Admin: 200 requests/10min');
+    console.log('   • Password Reset: 5 requests/hour');
+  }
 });
 
 // Handle unhandled promise rejections
