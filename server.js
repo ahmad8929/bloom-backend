@@ -16,6 +16,7 @@ const productRoutes = require('./routes/products');
 const cartRoutes = require('./routes/cart');
 const orderRoutes = require('./routes/orders');
 const adminRoutes = require('./routes/admin');
+const categoryRoutes = require('./routes/categories');
 
 // Import custom middleware
 const errorHandler = require('./middlewares/errorHandler');
@@ -56,6 +57,7 @@ app.use('/api/admin', rateLimiters.admin);
 app.use('/api/upload', rateLimiters.upload);
 app.use('/api/products', rateLimiters.products);
 app.use('/api/cart', rateLimiters.cart);
+app.use('/api/categories', categoryRoutes);
 
 // General rate limit for all other API routes (should be last)
 app.use('/api/', rateLimiters.general);
