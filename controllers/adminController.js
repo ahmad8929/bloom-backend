@@ -75,11 +75,77 @@ const adminController = {
   },
 
   // Get all customers
-  async getCustomers(req, res) {
+  // async getCustomers(req, res) {
+  //   try {
+  //     const { page = 1, limit = 20, search } = req.query;
+
+  //     const filter = { role: 'user' };
+  //     if (search) {
+  //       filter.$or = [
+  //         { firstName: { $regex: search, $options: 'i' } },
+  //         { lastName: { $regex: search, $options: 'i' } },
+  //         { email: { $regex: search, $options: 'i' } }
+  //       ];
+  //     }
+
+  //     const skip = (page - 1) * limit;
+  //     const total = await User.countDocuments(filter);
+  //     const totalPages = Math.ceil(total / limit);
+
+  //     const customers = await User.find(filter)
+  //       .select('-password')
+  //       .sort('-createdAt')
+  //       .skip(skip)
+  //       .limit(Number(limit))
+  //       .lean();
+
+  //     // Get order count for each customer
+  //     const customersWithStats = await Promise.all(
+  //       customers.map(async (customer) => {
+  //         const orderCount = await Order.countDocuments({ user: customer._id });
+  //         const totalSpent = await Order.aggregate([
+  //           { $match: { user: customer._id, status: 'delivered' } },
+  //           { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+  //         ]);
+
+  //         return {
+  //           ...customer,
+  //           orderCount,
+  //           totalSpent: totalSpent[0]?.total || 0
+  //         };
+  //       })
+  //     );
+
+  //     res.json({
+  //       status: 'success',
+  //       data: {
+  //         customers: customersWithStats,
+  //         pagination: {
+  //           page: Number(page),
+  //           limit: Number(limit),
+  //           total,
+  //           totalPages,
+  //           hasNext: page < totalPages,
+  //           hasPrev: page > 1
+  //         }
+  //       }
+  //     });
+  //   } catch (error) {
+  //     console.error('Get customers error:', error);
+  //     res.status(500).json({
+  //       status: 'error',
+  //       message: 'Internal server error'
+  //     });
+  //   }
+  // },
+
+   async getCustomers(req, res) {
     try {
       const { page = 1, limit = 20, search } = req.query;
 
-      const filter = { role: 'user' };
+      // Build filter - REMOVE role filter to get all users
+      const filter = {}; // Don't filter by role initially
+      
       if (search) {
         filter.$or = [
           { firstName: { $regex: search, $options: 'i' } },
@@ -88,33 +154,61 @@ const adminController = {
         ];
       }
 
+      console.log('Filter being used:', JSON.stringify(filter, null, 2));
+
       const skip = (page - 1) * limit;
+      
+      // First, let's see total count without filter
+      const totalUsersInDB = await User.countDocuments();
+      console.log('Total users in database:', totalUsersInDB);
+      
       const total = await User.countDocuments(filter);
+      console.log('Total users matching filter:', total);
+      
       const totalPages = Math.ceil(total / limit);
 
       const customers = await User.find(filter)
-        .select('-password')
+        .select('-password -resetPasswordToken -resetPasswordOTP -emailVerificationToken')
         .sort('-createdAt')
         .skip(skip)
         .limit(Number(limit))
         .lean();
 
-      // Get order count for each customer
+      console.log('Found customers:', customers.length);
+      console.log('Customer roles:', customers.map(c => ({ id: c._id, role: c.role, email: c.email })));
+
+      // Get order stats for each customer
       const customersWithStats = await Promise.all(
         customers.map(async (customer) => {
-          const orderCount = await Order.countDocuments({ user: customer._id });
-          const totalSpent = await Order.aggregate([
-            { $match: { user: customer._id, status: 'delivered' } },
-            { $group: { _id: null, total: { $sum: '$totalAmount' } } }
-          ]);
+          try {
+            const orderCount = await Order.countDocuments({ user: customer._id });
+            const totalSpentResult = await Order.aggregate([
+              { $match: { user: customer._id, status: 'delivered' } },
+              { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+            ]);
 
-          return {
-            ...customer,
-            orderCount,
-            totalSpent: totalSpent[0]?.total || 0
-          };
+            return {
+              ...customer,
+              orderCount,
+              totalSpent: totalSpentResult[0]?.total || 0
+            };
+          } catch (error) {
+            console.error(`Error getting stats for customer ${customer._id}:`, error);
+            return {
+              ...customer,
+              orderCount: 0,
+              totalSpent: 0
+            };
+          }
         })
       );
+
+      console.log('Final customer data:', customersWithStats.map(c => ({ 
+        id: c._id, 
+        email: c.email, 
+        role: c.role, 
+        isEmailVerified: c.isEmailVerified 
+      })));
 
       res.json({
         status: 'success',
@@ -134,20 +228,50 @@ const adminController = {
       console.error('Get customers error:', error);
       res.status(500).json({
         status: 'error',
+        message: 'Internal server error',
+        debug: error.message
+      });
+    }
+  },
+
+  // Also add a function to check all users in the database
+  async getAllUsersDebug(req, res) {
+    try {
+      const allUsers = await User.find({})
+        .select('firstName lastName email role isEmailVerified isActive createdAt')
+        .sort('-createdAt')
+        .lean();
+
+      console.log('All users in database:');
+      allUsers.forEach((user, index) => {
+        console.log(`${index + 1}. ${user.firstName} ${user.lastName} (${user.email}) - Role: ${user.role}, Verified: ${user.isEmailVerified}`);
+      });
+
+      res.json({
+        status: 'success',
+        data: {
+          users: allUsers,
+          count: allUsers.length
+        }
+      });
+    } catch (error) {
+      console.error('Debug users error:', error);
+      res.status(500).json({
+        status: 'error',
         message: 'Internal server error'
       });
     }
   },
 
   // Toggle email verification status
-  async toggleEmailVerification(req, res) {
+async toggleEmailVerification(req, res) {
     try {
       const { id } = req.params;
-      const { isEmailVerified } = req.body;
+      const { isEmailVerified } = req.body; // Note: using isEmailVerified to match User model
 
       const user = await User.findByIdAndUpdate(
         id,
-        { isEmailVerified },
+        { isEmailVerified }, // This matches the User model field name
         { new: true }
       ).select('-password');
 
