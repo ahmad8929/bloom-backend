@@ -40,7 +40,7 @@ const productSchema = new mongoose.Schema({
   // NEW: Category field
   category: {
     type: String,
-    enum: ['Saree', 'Kurti', 'Suite', 'Night Dress', 'Skirt', 'Top'],
+    enum: ['Cordset', 'Anarkali', 'Suite', 'Kurti', 'Saree', 'Lehenga', 'Western Dress'],
     required: [true, 'Product category is required'],
     trim: true
   },
