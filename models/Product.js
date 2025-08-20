@@ -37,6 +37,13 @@ const productSchema = new mongoose.Schema({
     required: [true, 'Product material is required'],
     trim: true
   },
+  // NEW: Category field
+  category: {
+    type: String,
+    enum: ['Cordset', 'Anarkali', 'Suite', 'Kurti', 'Saree', 'Lehenga', 'Western Dress'],
+    required: [true, 'Product category is required'],
+    trim: true
+  },
   careInstructions: {
     type: String,
     required: [true, 'Care instructions are required']
@@ -84,6 +91,8 @@ productSchema.virtual('discountPercentage').get(function() {
 productSchema.index({ name: 'text', description: 'text', material: 'text' });
 productSchema.index({ price: 1 });
 productSchema.index({ size: 1 });
+productSchema.index({ material: 1 });
+productSchema.index({ category: 1 }); // NEW: Category index
 productSchema.index({ isNewArrival: 1 });
 productSchema.index({ isSale: 1 });
 productSchema.index({ createdAt: -1 });
