@@ -1,0 +1,49 @@
+# Node.js dependencies
+node_modules
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+
+# Dependency lock files (if you want only one to be used inside container)
+# Uncomment whichever you don’t use
+# yarn.lock
+# pnpm-lock.yaml
+
+# Build artifacts
+dist
+build
+
+# Logs
+logs
+*.log
+
+# Environment files
+.env
+.env.local
+.env.development
+.env.production
+.env.test
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Docker
+Dockerfile
+.dockerignore
+
+# IDE / Editor
+.vscode
+.idea
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Uploads (if you don’t want local uploaded files baked into image)
+uploads
