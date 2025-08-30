@@ -220,7 +220,7 @@ const mongoOptions = {
 
 mongoose.connect(process.env.MONGODB_URI, mongoOptions)
 .then(() => {
-  console.log('✅ Connected to MongoDB');
+  console.log('Connected to MongoDB');
   if (process.env.NODE_ENV === 'development') {
     console.log(`📊 Database: ${mongoose.connection.name}`);
   }
@@ -240,7 +240,7 @@ const server = app.listen(PORT, () => {
     console.log(`🔗 API Base URL: http://localhost:${PORT}/api`);
   }
   
-  // Log rate limiting info
+  // Log rate limiting 
   logRateLimitInfo();
 });
 
