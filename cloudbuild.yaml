@@ -4,7 +4,7 @@ steps:
     entrypoint: npm
     args: ["install"]
 
-  # Step 2: Run build (optional — if you had TypeScript or build step)
+  # Step 2: Run build (optional)
   # - name: "node:18"
   #   entrypoint: npm
   #   args: ["run", "build"]
@@ -23,3 +23,7 @@ images:
 
 # Optional: Set build timeout
 timeout: "900s"
+
+# 👇 Add this section to fix logging issue
+options:
+  logging: CLOUD_LOGGING_ONLY
