@@ -1,9 +1,4 @@
 
-
-
-
-// README.md
-/*
 # eCommerce Backend API
 
 A comprehensive eCommerce backend built with Node.js, Express, and MongoDB.
