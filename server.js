@@ -37,16 +37,22 @@ app.set('trust proxy', 1);
 // ======================
 // 🔴 CORS FIRST (CRITICAL)
 // ======================
+// ======================
+// 🔴 CORS FIRST (CRITICAL)
+// ======================
+const allowedOrigins = [
+  'http://localhost:3000',
+  'https://bloom-tales-frontend.vercel.app',
+  'https://www.bloomtales.shop',
+  'https://bloomtales.shop',
+];
+
 const corsOptions = {
   origin: function (origin, callback) {
+    // Allow server-to-server / Postman / mobile apps
     if (!origin) return callback(null, true);
 
-    if (process.env.FRONTEND_URL) {
-      const allowed = process.env.FRONTEND_URL.split(',').map(o => o.trim());
-      if (allowed.includes(origin)) return callback(null, true);
-    }
-
-    if (process.env.NODE_ENV === 'production' && origin.startsWith('https://')) {
+    if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
 
