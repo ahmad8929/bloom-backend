@@ -6,8 +6,25 @@ const User = require('../models/User');
 const { sendEmail } = require('../utils/email');
 const { generateTokens } = require('../utils/jwt');
 
+/**
+ * Helper to return full email / SMTP errors
+ */
+function formatEmailError(error) {
+  return {
+    message: error.message,
+    name: error.name,
+    code: error.code,
+    response: error.response,
+    responseCode: error.responseCode,
+    stack: error.stack
+  };
+}
+
 const authController = {
-  // Signup
+
+  // ===========================
+  // SIGNUP
+  // ===========================
   async signup(req, res) {
     try {
       const errors = validationResult(req);
@@ -21,7 +38,6 @@ const authController = {
 
       const { firstName, lastName, email, password, phone } = req.body;
 
-      // Check if user already exists
       const existingUser = await User.findOne({ email });
       if (existingUser) {
         return res.status(400).json({
@@ -30,7 +46,6 @@ const authController = {
         });
       }
 
-      // Create new user
       const user = new User({
         firstName,
         lastName,
@@ -39,16 +54,16 @@ const authController = {
         phone
       });
 
-      // Generate email verification token
       const verificationToken = crypto.randomBytes(32).toString('hex');
       user.emailVerificationToken = verificationToken;
-      user.emailVerificationExpire = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+      user.emailVerificationExpire = Date.now() + 24 * 60 * 60 * 1000;
 
       await user.save();
 
-      // Send verification email
       try {
-        const verificationUrl = `${process.env.FRONTEND_URL.replace(/\/$/, '')}/verify-email/${verificationToken}`;
+        const verificationUrl =
+          `${process.env.FRONTEND_URL.replace(/\/$/, '')}/verify-email/${verificationToken}`;
+
         await sendEmail({
           to: user.email,
           subject: 'Email Verification',
@@ -59,14 +74,17 @@ const authController = {
           }
         });
       } catch (emailError) {
-        console.error('Email sending failed:', emailError);
-        // Don't fail the signup if email fails, but log it
+        console.error('Signup verification email failed:', emailError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to send verification email',
+          error: formatEmailError(emailError)
+        });
       }
 
-      // Don't generate tokens until email is verified
       res.status(201).json({
         status: 'success',
-        message: 'User created successfully. Please check your email to verify your account before logging in.',
+        message: 'User created successfully. Please verify your email.',
         data: {
           user: {
             id: user._id,
@@ -83,12 +101,14 @@ const authController = {
       res.status(500).json({
         status: 'error',
         message: 'Internal server error',
-        error: error.message
+        error
       });
     }
   },
 
-  // Login - FIXED to require email verification
+  // ===========================
+  // LOGIN
+  // ===========================
   async login(req, res) {
     try {
       const errors = validationResult(req);
@@ -102,7 +122,6 @@ const authController = {
 
       const { email, password } = req.body;
 
-      // Find user and include password
       const user = await User.findOne({ email }).select('+password');
       if (!user) {
         return res.status(401).json({
@@ -111,15 +130,6 @@ const authController = {
         });
       }
 
-      // Check if account is locked
-      if (user.isLocked && user.isLocked()) {
-        return res.status(423).json({
-          status: 'error',
-          message: 'Account temporarily locked due to too many failed login attempts'
-        });
-      }
-
-      // Check if account is active
       if (!user.isActive) {
         return res.status(401).json({
           status: 'error',
@@ -127,38 +137,25 @@ const authController = {
         });
       }
 
-      // *** CRITICAL FIX: Check if email is verified ***
       if (!user.isEmailVerified) {
         return res.status(401).json({
           status: 'error',
-          message: 'Please verify your email address before logging in. Check your inbox for the verification link.',
+          message: 'Please verify your email before login',
           code: 'EMAIL_NOT_VERIFIED'
         });
       }
 
-      // Verify password
       const isPasswordValid = await user.comparePassword(password);
       if (!isPasswordValid) {
-        // Increment login attempts
-        user.loginAttempts = (user.loginAttempts || 0) + 1;
-        if (user.loginAttempts >= 5) {
-          user.lockUntil = Date.now() + 30 * 60 * 1000; // Lock for 30 minutes
-        }
-        await user.save();
-
         return res.status(401).json({
           status: 'error',
           message: 'Invalid credentials'
         });
       }
 
-      // Reset login attempts and update last login
-      user.loginAttempts = 0;
-      user.lockUntil = undefined;
       user.lastLogin = new Date();
       await user.save();
 
-      // Generate tokens
       const { accessToken, refreshToken } = generateTokens(user._id);
 
       res.json({
@@ -182,15 +179,16 @@ const authController = {
       res.status(500).json({
         status: 'error',
         message: 'Internal server error',
-        error: error.message
+        error
       });
     }
   },
 
-  // Logout
+  // ===========================
+  // LOGOUT
+  // ===========================
   async logout(req, res) {
     try {
-      // In a real app, you might want to blacklist the token
       res.json({
         status: 'success',
         message: 'Logout successful'
@@ -200,20 +198,21 @@ const authController = {
       res.status(500).json({
         status: 'error',
         message: 'Internal server error',
-        error: error.message
+        error
       });
     }
   },
 
-  // Refresh Token - Also check email verification
+  // ===========================
+  // REFRESH TOKEN
+  // ===========================
   async refreshToken(req, res) {
     try {
       const { refreshToken } = req.body;
-
       if (!refreshToken) {
         return res.status(401).json({
           status: 'error',
-          message: 'Refresh token is required'
+          message: 'Refresh token required'
         });
       }
 
@@ -227,7 +226,6 @@ const authController = {
         });
       }
 
-      // Check if email is still verified
       if (!user.isEmailVerified) {
         return res.status(401).json({
           status: 'error',
@@ -241,14 +239,6 @@ const authController = {
       res.json({
         status: 'success',
         data: {
-          user: {
-            id: user._id,
-            firstName: user.firstName,
-            lastName: user.lastName,
-            email: user.email,
-            role: user.role,
-            isEmailVerified: user.isEmailVerified
-          },
           accessToken: tokens.accessToken,
           refreshToken: tokens.refreshToken
         }
@@ -258,12 +248,14 @@ const authController = {
       res.status(401).json({
         status: 'error',
         message: 'Invalid refresh token',
-        error: error.message
+        error
       });
     }
   },
 
-  // NEW: Send Password Reset OTP
+  // ===========================
+  // SEND RESET OTP
+  // ===========================
   async sendResetOTP(req, res) {
     try {
       const { email } = req.body;
@@ -272,20 +264,16 @@ const authController = {
       if (!user) {
         return res.status(404).json({
           status: 'error',
-          message: 'No user found with this email address'
+          message: 'No user found with this email'
         });
       }
 
-      // Generate 6-digit OTP
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
-      
-      // Store OTP with expiration (15 minutes)
       user.resetPasswordOTP = otp;
-      user.resetPasswordOTPExpire = Date.now() + 15 * 60 * 1000; // 15 minutes
-      
+      user.resetPasswordOTPExpire = Date.now() + 15 * 60 * 1000;
+
       await user.save();
 
-      // Send OTP email
       try {
         await sendEmail({
           to: user.email,
@@ -293,19 +281,20 @@ const authController = {
           template: 'passwordResetOTP',
           context: {
             name: user.firstName,
-            otp: otp
+            otp
           }
         });
 
         res.json({
           status: 'success',
-          message: 'Password reset OTP sent to your email address'
+          message: 'OTP sent successfully'
         });
       } catch (emailError) {
         console.error('OTP email failed:', emailError);
         res.status(500).json({
           status: 'error',
-          message: 'Failed to send OTP email. Please try again later.'
+          message: 'Failed to send OTP email',
+          error: formatEmailError(emailError)
         });
       }
     } catch (error) {
@@ -313,25 +302,20 @@ const authController = {
       res.status(500).json({
         status: 'error',
         message: 'Internal server error',
-        error: error.message
+        error
       });
     }
   },
 
-  // NEW: Verify OTP
+  // ===========================
+  // VERIFY RESET OTP
+  // ===========================
   async verifyResetOTP(req, res) {
     try {
       const { email, otp } = req.body;
 
-      if (!email || !otp) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Email and OTP are required'
-        });
-      }
-
       const user = await User.findOne({
-        email: email,
+        email,
         resetPasswordOTP: otp,
         resetPasswordOTPExpire: { $gt: Date.now() }
       });
@@ -343,52 +327,36 @@ const authController = {
         });
       }
 
-      // Generate a temporary token for password reset (valid for 10 minutes)
       const resetToken = crypto.randomBytes(32).toString('hex');
       user.resetPasswordToken = resetToken;
-      user.resetPasswordExpire = Date.now() + 10 * 60 * 1000; // 10 minutes
-      
-      // Clear OTP fields
+      user.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
+
       user.resetPasswordOTP = undefined;
       user.resetPasswordOTPExpire = undefined;
-      
+
       await user.save();
 
       res.json({
         status: 'success',
-        message: 'OTP verified successfully',
-        data: {
-          resetToken: resetToken
-        }
+        message: 'OTP verified',
+        data: { resetToken }
       });
     } catch (error) {
       console.error('Verify OTP error:', error);
       res.status(500).json({
         status: 'error',
         message: 'Internal server error',
-        error: error.message
+        error
       });
     }
   },
 
-  // UPDATED: Reset Password with Token (after OTP verification)
+  // ===========================
+  // RESET PASSWORD
+  // ===========================
   async resetPassword(req, res) {
     try {
       const { resetToken, password } = req.body;
-
-      if (!resetToken || !password) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Reset token and password are required'
-        });
-      }
-
-      if (password.length < 8) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Password must be at least 8 characters long'
-        });
-      }
 
       const user = await User.findOne({
         resetPasswordToken: resetToken,
@@ -417,12 +385,14 @@ const authController = {
       res.status(500).json({
         status: 'error',
         message: 'Internal server error',
-        error: error.message
+        error
       });
     }
   },
 
-  // Keep existing forgot password for backward compatibility (if needed)
+  // ===========================
+  // FORGOT PASSWORD (LINK)
+  // ===========================
   async forgotPassword(req, res) {
     try {
       const { email } = req.body;
@@ -431,23 +401,21 @@ const authController = {
       if (!user) {
         return res.status(404).json({
           status: 'error',
-          message: 'No user found with this email address'
+          message: 'No user found with this email'
         });
       }
 
-      // Generate reset token
       const resetToken = crypto.randomBytes(32).toString('hex');
       user.resetPasswordToken = resetToken;
-      user.resetPasswordExpire = Date.now() + 60 * 60 * 1000; // 1 hour
+      user.resetPasswordExpire = Date.now() + 60 * 60 * 1000;
 
       await user.save();
 
-      // Send reset email
       try {
         const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
         await sendEmail({
           to: user.email,
-          subject: 'Password Reset Request',
+          subject: 'Password Reset',
           template: 'passwordReset',
           context: {
             name: user.firstName,
@@ -457,13 +425,14 @@ const authController = {
 
         res.json({
           status: 'success',
-          message: 'Password reset email sent successfully'
+          message: 'Password reset email sent'
         });
       } catch (emailError) {
         console.error('Password reset email failed:', emailError);
         res.status(500).json({
           status: 'error',
-          message: 'Failed to send password reset email. Please try again later.'
+          message: 'Failed to send password reset email',
+          error: formatEmailError(emailError)
         });
       }
     } catch (error) {
@@ -471,12 +440,14 @@ const authController = {
       res.status(500).json({
         status: 'error',
         message: 'Internal server error',
-        error: error.message
+        error
       });
     }
   },
 
-  // Verify Email
+  // ===========================
+  // VERIFY EMAIL
+  // ===========================
   async verifyEmail(req, res) {
     try {
       const { token } = req.params;
@@ -501,19 +472,21 @@ const authController = {
 
       res.json({
         status: 'success',
-        message: 'Email verified successfully! You can now log in to your account.'
+        message: 'Email verified successfully'
       });
     } catch (error) {
       console.error('Verify email error:', error);
       res.status(500).json({
         status: 'error',
         message: 'Internal server error',
-        error: error.message
+        error
       });
     }
   },
 
-  // Resend Verification
+  // ===========================
+  // RESEND VERIFICATION
+  // ===========================
   async resendVerification(req, res) {
     try {
       const { email } = req.body;
@@ -529,20 +502,20 @@ const authController = {
       if (user.isEmailVerified) {
         return res.status(400).json({
           status: 'error',
-          message: 'Email is already verified'
+          message: 'Email already verified'
         });
       }
 
-      // Generate new verification token
       const verificationToken = crypto.randomBytes(32).toString('hex');
       user.emailVerificationToken = verificationToken;
-      user.emailVerificationExpire = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+      user.emailVerificationExpire = Date.now() + 24 * 60 * 60 * 1000;
 
       await user.save();
 
-      // Send verification email
       try {
-        const verificationUrl = `${process.env.FRONTEND_URL}/verify-email/${verificationToken}`;
+        const verificationUrl =
+          `${process.env.FRONTEND_URL}/verify-email/${verificationToken}`;
+
         await sendEmail({
           to: user.email,
           subject: 'Email Verification',
@@ -555,75 +528,58 @@ const authController = {
 
         res.json({
           status: 'success',
-          message: 'Verification email sent successfully'
+          message: 'Verification email resent'
         });
       } catch (emailError) {
         console.error('Resend verification email failed:', emailError);
         res.status(500).json({
           status: 'error',
-          message: 'Failed to send verification email. Please try again later.'
+          message: 'Failed to send verification email',
+          error: formatEmailError(emailError)
         });
       }
     } catch (error) {
       console.error('Resend verification error:', error);
       res.status(500).json({
         status: 'error',
-        message: 'Internal server error'
+        message: 'Internal server error',
+        error
       });
     }
   },
 
-  // Get Me
+  // ===========================
+  // GET ME
+  // ===========================
   async getMe(req, res) {
     try {
       const user = await User.findById(req.user.id);
 
       res.json({
         status: 'success',
-        data: {
-          user: {
-            id: user._id,
-            firstName: user.firstName,
-            lastName: user.lastName,
-            email: user.email,
-            role: user.role,
-            isEmailVerified: user.isEmailVerified,
-            createdAt: user.createdAt
-          }
-        }
+        data: { user }
       });
     } catch (error) {
       console.error('Get me error:', error);
       res.status(500).json({
         status: 'error',
-        message: 'Internal server error'
+        message: 'Internal server error',
+        error
       });
     }
   },
 
-  // Update Password
+  // ===========================
+  // UPDATE PASSWORD
+  // ===========================
   async updatePassword(req, res) {
     try {
       const { currentPassword, newPassword } = req.body;
 
-      if (!currentPassword || !newPassword) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Current password and new password are required'
-        });
-      }
-
-      if (newPassword.length < 6) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'New password must be at least 6 characters long'
-        });
-      }
-
       const user = await User.findById(req.user.id).select('+password');
+      const isValid = await user.comparePassword(currentPassword);
 
-      const isCurrentPasswordValid = await user.comparePassword(currentPassword);
-      if (!isCurrentPasswordValid) {
+      if (!isValid) {
         return res.status(400).json({
           status: 'error',
           message: 'Current password is incorrect'
@@ -641,7 +597,8 @@ const authController = {
       console.error('Update password error:', error);
       res.status(500).json({
         status: 'error',
-        message: 'Internal server error'
+        message: 'Internal server error',
+        error
       });
     }
   }
