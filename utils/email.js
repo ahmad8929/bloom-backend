@@ -2,7 +2,7 @@
 const Nodemailer = require("nodemailer");
 const { MailtrapTransport } = require("mailtrap");
 
-const TOKEN = "0873a4acf16f8376bd746cb02274269e";
+const TOKEN = process.env.MAILTRAP_TOKEN;
 const transport = Nodemailer.createTransport(
   MailtrapTransport({
     token: TOKEN,
