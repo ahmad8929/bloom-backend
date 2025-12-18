@@ -256,57 +256,77 @@ const authController = {
   // ===========================
   // SEND RESET OTP
   // ===========================
-  async sendResetOTP(req, res) {
-    try {
-      const { email } = req.body;
+ // In authController.js - Updated sendResetOTP section
+async sendResetOTP(req, res) {
+  try {
+    const { email } = req.body;
 
-      const user = await User.findOne({ email });
-      if (!user) {
-        return res.status(404).json({
-          status: 'error',
-          message: 'No user found with this email'
-        });
-      }
+    console.log(`🔑 Reset OTP requested for: ${email}`);
 
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
-      user.resetPasswordOTP = otp;
-      user.resetPasswordOTPExpire = Date.now() + 15 * 60 * 1000;
-
-      await user.save();
-
-      try {
-        await sendEmail({
-          to: user.email,
-          subject: 'Password Reset OTP',
-          template: 'passwordResetOTP',
-          context: {
-            name: user.firstName,
-            otp
-          }
-        });
-
-        res.json({
-          status: 'success',
-          message: 'OTP sent successfully'
-        });
-      } catch (emailError) {
-        console.error('OTP email failed:', emailError);
-        res.status(500).json({
-          status: 'error',
-          message: 'Failed to send OTP email',
-          error: formatEmailError(emailError)
-        });
-      }
-    } catch (error) {
-      console.error('Send reset OTP error:', error);
-      res.status(500).json({
+    const user = await User.findOne({ email });
+    if (!user) {
+      console.log(`❌ No user found with email: ${email}`);
+      return res.status(404).json({
         status: 'error',
-        message: 'Internal server error',
-        error
+        message: 'No user found with this email'
       });
     }
-  },
 
+    console.log(`👤 User found: ${user.firstName} ${user.lastName}`);
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    user.resetPasswordOTP = otp;
+    user.resetPasswordOTPExpire = Date.now() + 15 * 60 * 1000;
+
+    await user.save();
+    console.log(`✅ OTP ${otp} saved for user ${email}`);
+
+    try {
+      console.log(`📧 Sending OTP email to ${email}...`);
+      await sendEmail({
+        to: user.email,
+        subject: 'Password Reset OTP - Bloom Tales',
+        template: 'passwordResetOTP',
+        context: {
+          name: user.firstName,
+          otp
+        }
+      });
+
+      console.log(`✅ OTP email sent successfully to ${email}`);
+      
+      res.json({
+        status: 'success',
+        message: 'OTP sent successfully'
+      });
+    } catch (emailError) {
+      console.error('❌ OTP email failed with full error:', emailError);
+      
+      // Provide detailed error info in response
+      const formattedError = formatEmailError(emailError);
+      
+      res.status(500).json({
+        status: 'error',
+        message: 'Failed to send OTP email',
+        error: formattedError,
+        // Add helpful debug info
+        debug: {
+          emailAttempted: user.email,
+          fromAddress: process.env.EMAIL_FROM,
+          mailtrapTokenExists: !!process.env.MAILTRAP_TOKEN,
+          timestamp: new Date().toISOString()
+        }
+      });
+    }
+  } catch (error) {
+    console.error('Send reset OTP error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Internal server error',
+      error: error.message
+    });
+  }
+},
   // ===========================
   // VERIFY RESET OTP
   // ===========================
