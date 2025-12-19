@@ -7,11 +7,6 @@ const MAILTRAP_TOKEN = process.env.MAILTRAP_TOKEN || "0873a4acf16f8376bd746cb022
 const EMAIL_FROM = process.env.EMAIL_FROM || "noreply@bloomtales.shop";
 const EMAIL_FROM_NAME = process.env.EMAIL_FROM_NAME || "Bloom Tales";
 
-// Validate configuration
-if (!MAILTRAP_TOKEN) {
-  console.error("❌ MAILTRAP_TOKEN is not defined in environment variables");
-}
-
 // Create transporter
 const transporter = Nodemailer.createTransport(
   MailtrapTransport({
