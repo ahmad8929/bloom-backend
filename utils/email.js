@@ -1,65 +1,139 @@
 const Nodemailer = require("nodemailer");
 const { MailtrapTransport } = require("mailtrap");
 
-const TOKEN = process.env.MAILTRAP_TOKEN || "0873a4acf16f8376bd746cb02274269e";
+// ===============================
+// CONFIG
+// ===============================
+const MAILTRAP_TOKEN = process.env.MAILTRAP_TOKEN || "0873a4acf16f8376bd746cb02274269e";
+
+// Safe fallback (prevents http://undefined)
+const FRONTEND_URL =
+  process.env.FRONTEND_URL || "https://bloomtales.shop";
+
+if (!MAILTRAP_TOKEN) {
+  console.warn("⚠️ MAILTRAP_TOKEN is missing");
+}
+
 const transport = Nodemailer.createTransport(
   MailtrapTransport({
-    token: TOKEN,
+    token: MAILTRAP_TOKEN,
   })
 );
 
-const sendEmail = async ({ to, subject, template, context }) => {
+// ===============================
+// EMAIL SENDER
+// ===============================
+const sendEmail = async ({ to, subject, template, context = {} }) => {
   try {
-    console.log(`📧 Attempting to send email to: ${to}`);
-    console.log(`📧 Using MAILTRAP_TOKEN: ${TOKEN ? 'Token exists' : 'NO TOKEN!'}`);
-    
+    console.log(`📧 Sending email → ${to}`);
+    console.log(`📧 Template → ${template}`);
+
+    // ===============================
+    // EMAIL TEMPLATES
+    // ===============================
     const templates = {
-     emailVerification: `
-  <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto;">
-    <h2>Welcome ${context.name} 👋</h2>
+      // -------------------------------
+      // EMAIL VERIFICATION
+      // -------------------------------
+      emailVerification: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto;">
+          <h2>Welcome ${context.name} 👋</h2>
 
-    <p>Thank you for signing up at <strong>Bloom Tales</strong>.</p>
+          <p>Thank you for joining <strong>Bloom Tales</strong>.</p>
 
-    <p>Please verify your email by clicking the button below:</p>
+          <p>Please verify your email address to activate your account:</p>
 
-    <a href="${context.verificationUrl}"
-       style="
-         display: inline-block;
-         padding: 12px 24px;
-         background-color: #4CAF50;
-         color: #ffffff;
-         text-decoration: none;
-         border-radius: 6px;
-         font-weight: bold;
-       ">
-       Verify Email
-    </a>
+          <a href="${context.verificationUrl}"
+            style="
+              display: inline-block;
+              padding: 12px 24px;
+              background-color: #4CAF50;
+              color: #ffffff;
+              text-decoration: none;
+              border-radius: 6px;
+              font-weight: bold;
+            ">
+            Verify Email
+          </a>
 
-    <p style="margin-top: 20px;">
-      If you didn’t create an account, you can safely ignore this email.
-    </p>
+          <p style="margin-top: 20px;">
+            If the button doesn’t work, copy and paste this link into your browser:
+          </p>
 
-    <p style="color: #888; font-size: 12px;">
-      This link will expire in 24 hours.
-    </p>
+          <p>
+            <a href="${context.verificationUrl}">
+              ${context.verificationUrl}
+            </a>
+          </p>
 
-    <hr />
-    <p style="font-size: 12px; color: #999;">
-      © Bloom Tales
-    </p>
-  </div>
-`,
+          <p style="font-size: 12px; color: #888;">
+            This link will expire in 24 hours.
+          </p>
 
-      passwordResetOTP: `
-        <h2>Password Reset OTP</h2>
-        <h1 style="font-size: 48px; color: #4CAF50;">${context.otp}</h1>
-        <p>This OTP expires in 15 minutes.</p>
+          <hr />
+          <p style="font-size: 12px; color: #999;">
+            © Bloom Tales
+          </p>
+        </div>
       `,
+
+      // -------------------------------
+      // PASSWORD RESET OTP
+      // -------------------------------
+      passwordResetOTP: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto;">
+          <h2>Password Reset Request</h2>
+
+          <p>Hello ${context.name},</p>
+
+          <p>Use the OTP below to reset your password:</p>
+
+          <div style="
+            font-size: 36px;
+            font-weight: bold;
+            letter-spacing: 6px;
+            color: #4CAF50;
+            margin: 20px 0;
+          ">
+            ${context.otp}
+          </div>
+
+          <p>This OTP is valid for <strong>15 minutes</strong>.</p>
+
+          <p>If you did not request this, please ignore this email.</p>
+
+          <hr />
+          <p style="font-size: 12px; color: #999;">
+            © Bloom Tales
+          </p>
+        </div>
+      `,
+
+      // -------------------------------
+      // ORDER CONFIRMATION
+      // -------------------------------
       orderConfirmation: `
-        <h2>Order Confirmation</h2>
-        <p>Order #${context.orderNumber}</p>
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto;">
+          <h2>Order Confirmed 🎉</h2>
+
+          <p>Thank you for shopping with <strong>Bloom Tales</strong>.</p>
+
+          <p>Your order number:</p>
+
+          <h3>#${context.orderNumber}</h3>
+
+          <p>We’ll notify you once your order is shipped.</p>
+
+          <hr />
+          <p style="font-size: 12px; color: #999;">
+            © Bloom Tales
+          </p>
+        </div>
       `,
     };
+
+    const htmlContent =
+      templates[template] || context.html || "";
 
     const mailOptions = {
       from: {
@@ -68,35 +142,25 @@ const sendEmail = async ({ to, subject, template, context }) => {
       },
       to: Array.isArray(to) ? to : [to],
       subject,
-      html: templates[template] || context.html,
+      html: htmlContent,
       category: template || "Transactional",
     };
 
-    console.log('📧 Mail Options:', JSON.stringify({
-      from: mailOptions.from,
-      to: mailOptions.to,
-      subject: mailOptions.subject,
-      category: mailOptions.category
-    }, null, 2));
+    console.log("📧 Mail options prepared");
 
     const result = await transport.sendMail(mailOptions);
-    console.log(`✅ Email sent successfully to ${to}`);
-    console.log(`✅ Message ID: ${result.messageId}`);
-    
+
+    console.log(`✅ Email sent successfully → ${to}`);
+    console.log(`🆔 Message ID → ${result.messageId}`);
+
     return result;
   } catch (error) {
-    console.error("❌ Mailtrap error details:");
-    console.error("❌ Error name:", error.name);
-    console.error("❌ Error message:", error.message);
-    console.error("❌ Error code:", error.code);
-    console.error("❌ Full error:", error);
-    
-    if (error.response) {
-      console.error("❌ Response:", error.response);
-      console.error("❌ Response Code:", error.responseCode);
-    }
-    
-    // Throw the full error so authController can format it
+    console.error("❌ Email sending failed");
+    console.error("❌ Name:", error.name);
+    console.error("❌ Message:", error.message);
+    console.error("❌ Code:", error.code);
+    console.error("❌ Full Error:", error);
+
     throw error;
   }
 };
