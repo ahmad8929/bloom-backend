@@ -6,9 +6,13 @@ const { MailtrapTransport } = require("mailtrap");
 // ===============================
 const MAILTRAP_TOKEN = process.env.MAILTRAP_TOKEN || "0873a4acf16f8376bd746cb02274269e";
 
-// Safe fallback (prevents http://undefined)
 const FRONTEND_URL =
   process.env.FRONTEND_URL || "https://bloomtales.shop";
+
+const safeVerificationUrl =
+  context.verificationUrl ||
+  `${FRONTEND_URL.replace(/\/$/, '')}/verify-email/${context.token || ''}`;
+
 
 if (!MAILTRAP_TOKEN) {
   console.warn("⚠️ MAILTRAP_TOKEN is missing");
@@ -43,7 +47,7 @@ const sendEmail = async ({ to, subject, template, context = {} }) => {
 
           <p>Please verify your email address to activate your account:</p>
 
-          <a href="${context.verificationUrl}"
+          <a href="${safeVerificationUrl}"
             style="
               display: inline-block;
               padding: 12px 24px;
@@ -61,8 +65,8 @@ const sendEmail = async ({ to, subject, template, context = {} }) => {
           </p>
 
           <p>
-            <a href="${context.verificationUrl}">
-              ${context.verificationUrl}
+            <a href="${safeVerificationUrl}">
+              ${safeVerificationUrl}
             </a>
           </p>
 
