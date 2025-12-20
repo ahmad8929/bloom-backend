@@ -9,11 +9,6 @@ const MAILTRAP_TOKEN = process.env.MAILTRAP_TOKEN || "0873a4acf16f8376bd746cb022
 const FRONTEND_URL =
   process.env.FRONTEND_URL || "https://bloomtales.shop";
 
-const safeVerificationUrl =
-  context.verificationUrl ||
-  `${FRONTEND_URL.replace(/\/$/, '')}/verify-email/${context.token || ''}`;
-
-
 if (!MAILTRAP_TOKEN) {
   console.warn("⚠️ MAILTRAP_TOKEN is missing");
 }
@@ -28,6 +23,11 @@ const transport = Nodemailer.createTransport(
 // EMAIL SENDER
 // ===============================
 const sendEmail = async ({ to, subject, template, context = {} }) => {
+  
+const safeVerificationUrl =
+  context.verificationUrl ||
+  `${FRONTEND_URL.replace(/\/$/, '')}/verify-email/${context.token || ''}`;
+
   try {
     console.log(`📧 Sending email → ${to}`);
     console.log(`📧 Template → ${template}`);
