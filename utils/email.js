@@ -6,8 +6,7 @@ const { MailtrapTransport } = require("mailtrap");
 // ===============================
 const MAILTRAP_TOKEN = process.env.MAILTRAP_TOKEN || "0873a4acf16f8376bd746cb02274269e";
 
-const FRONTEND_URL =
-  process.env.FRONTEND_URL || "https://bloomtales.shop";
+const FRONTEND_URL = "https://bloomtales.shop";
 
 if (!MAILTRAP_TOKEN) {
   console.warn("⚠️ MAILTRAP_TOKEN is missing");
