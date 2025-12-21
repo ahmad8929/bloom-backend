@@ -12,8 +12,9 @@ const productController = {
         minPrice,
         maxPrice,
         size,
+        color, // NEW: Color filter (from fixed set)
         material,
-        category, // NEW: Category filter
+        category,
         isNewArrival,
         isSale,
         search
@@ -25,14 +26,26 @@ const productController = {
       const filter = {};
       
       try {
-        if (size && size !== 'all') filter.size = size;
+        // Size filter - check variants if they exist, otherwise check legacy size field
+        if (size && size !== 'all') {
+          // Filter by variants that have this size with stock > 0
+          filter.$or = [
+            { 'variants.size': size, 'variants.stock': { $gt: 0 } },
+            { size: size }
+          ];
+        }
+        
+        // Color filter - product-level color
+        if (color && color !== 'all') {
+          filter['color.name'] = color;
+        }
         
         if (material) {
           console.log('Filtering by material:', material);
           filter.material = { $regex: new RegExp(material, 'i') };
         }
 
-        // NEW: Category filtering
+        // Category filtering
         if (category) {
           console.log('Filtering by category:', category);
           filter.category = { $regex: new RegExp(category, 'i') };
@@ -392,6 +405,61 @@ const productController = {
         }
       }
 
+      // Parse color if it comes as string
+      if (typeof productData.color === 'string') {
+        try {
+          productData.color = JSON.parse(productData.color);
+        } catch (e) {
+          // If parsing fails, try to match color name
+          const colorMap = {
+            'Red': { name: 'Red', hexCode: '#EF4444' },
+            'Blue': { name: 'Blue', hexCode: '#3B82F6' },
+            'Black': { name: 'Black', hexCode: '#000000' },
+            'White': { name: 'White', hexCode: '#FFFFFF' },
+            'Green': { name: 'Green', hexCode: '#10B981' },
+            'Pink': { name: 'Pink', hexCode: '#EC4899' },
+            'Yellow': { name: 'Yellow', hexCode: '#FBBF24' }
+          };
+          productData.color = colorMap[productData.color] || null;
+        }
+      }
+
+      // Parse variants if they come as strings
+      if (typeof productData.variants === 'string') {
+        try {
+          productData.variants = JSON.parse(productData.variants);
+        } catch (e) {
+          console.error('Error parsing variants:', e);
+          productData.variants = [];
+        }
+      }
+
+      // Validate and process variants (size + stock only, no color)
+      if (productData.variants && Array.isArray(productData.variants)) {
+        // Ensure each variant has required fields (size and stock)
+        productData.variants = productData.variants.map((variant, index) => {
+          if (!variant.size || variant.stock === undefined) {
+            throw new Error(`Variant ${index + 1} is missing required fields (size or stock)`);
+          }
+          return {
+            size: variant.size,
+            stock: Number(variant.stock) || 0,
+            sku: variant.sku || `${productData.name}-${variant.size}`.replace(/\s+/g, '-').toUpperCase()
+          };
+        });
+      } else {
+        // If no variants provided, create a default variant from legacy size field
+        if (productData.size) {
+          productData.variants = [{
+            size: productData.size,
+            stock: 0, // Default stock
+            sku: `${productData.name}-${productData.size}`.replace(/\s+/g, '-').toUpperCase()
+          }];
+        } else {
+          productData.variants = [];
+        }
+      }
+
       // Convert boolean strings to actual booleans
       if (typeof productData.isNewArrival === 'string') {
         productData.isNewArrival = productData.isNewArrival === 'true';
@@ -498,6 +566,50 @@ const productController = {
         } catch (e) {
           delete productData.colors;
         }
+      }
+
+      // Parse color if it comes as string
+      if (typeof productData.color === 'string') {
+        try {
+          productData.color = JSON.parse(productData.color);
+        } catch (e) {
+          // If parsing fails, try to match color name
+          const colorMap = {
+            'Red': { name: 'Red', hexCode: '#EF4444' },
+            'Blue': { name: 'Blue', hexCode: '#3B82F6' },
+            'Black': { name: 'Black', hexCode: '#000000' },
+            'White': { name: 'White', hexCode: '#FFFFFF' },
+            'Green': { name: 'Green', hexCode: '#10B981' },
+            'Pink': { name: 'Pink', hexCode: '#EC4899' },
+            'Yellow': { name: 'Yellow', hexCode: '#FBBF24' }
+          };
+          productData.color = colorMap[productData.color] || null;
+        }
+      }
+
+      // Parse variants if they come as strings
+      if (typeof productData.variants === 'string') {
+        try {
+          productData.variants = JSON.parse(productData.variants);
+        } catch (e) {
+          console.error('Error parsing variants:', e);
+          // Don't delete variants, keep existing ones
+        }
+      }
+
+      // Validate and process variants if provided (size + stock only)
+      if (productData.variants && Array.isArray(productData.variants)) {
+        // Ensure each variant has required fields (size and stock)
+        productData.variants = productData.variants.map((variant, index) => {
+          if (!variant.size || variant.stock === undefined) {
+            throw new Error(`Variant ${index + 1} is missing required fields (size or stock)`);
+          }
+          return {
+            size: variant.size,
+            stock: Number(variant.stock) || 0,
+            sku: variant.sku || `${productData.name || 'Product'}-${variant.size}`.replace(/\s+/g, '-').toUpperCase()
+          };
+        });
       }
 
       // Convert boolean strings to actual booleans

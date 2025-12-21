@@ -20,6 +20,10 @@ const cartItemSchema = new mongoose.Schema({
   size: {
     type: String,
     required: false
+  },
+  color: {
+    name: { type: String },
+    hexCode: { type: String }
   }
 }, { _id: true });
 

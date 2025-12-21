@@ -26,10 +26,29 @@ const orderController = {
         });
       }
 
-      // Validate stock for all items
+      // Validate stock for all items (check variants if available)
       for (const item of cart.items) {
         const product = await Product.findById(item.productId);
-        if (product && product.trackQuantity && product.quantity < item.quantity) {
+        if (!product) {
+          return res.status(404).json({
+            status: 'error',
+            message: `Product not found for item ${item.productId}`
+          });
+        }
+
+        // Check variant stock if product has variants
+        if (product.variants && product.variants.length > 0) {
+          if (item.size) {
+            const variantStock = product.getVariantStock(item.size);
+            if (variantStock === null || variantStock < item.quantity) {
+              return res.status(400).json({
+                status: 'error',
+                message: `Insufficient stock for ${product.name} (Size: ${item.size})`
+              });
+            }
+          }
+        } else if (product.trackQuantity && product.quantity < item.quantity) {
+          // Legacy: check product quantity directly
           return res.status(400).json({
             status: 'error',
             message: `Insufficient stock for ${product.name}`
@@ -53,6 +72,7 @@ const orderController = {
           price: item.product.price,
           quantity: item.quantity,
           size: item.size || item.product.size,
+          color: item.color || item.product.color || null,
           image: item.product.images[0]?.url
         })),
         shippingAddress,

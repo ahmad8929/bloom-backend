@@ -482,10 +482,22 @@ async toggleEmailVerification(req, res) {
 
       await order.save();
 
-      // Update product quantities
+      // Update product quantities (handle variants)
       for (const item of order.items) {
         const product = await Product.findById(item.product);
-        if (product && product.trackQuantity) {
+        if (!product) continue;
+
+        // If product has variants, update variant stock
+        if (product.variants && product.variants.length > 0 && item.size) {
+          const variantIndex = product.variants.findIndex(v => v.size === item.size);
+
+          if (variantIndex > -1) {
+            // Update variant stock
+            product.variants[variantIndex].stock = Math.max(0, product.variants[variantIndex].stock - item.quantity);
+            await product.save();
+          }
+        } else if (product.trackQuantity) {
+          // Legacy: update product quantity directly
           await Product.findByIdAndUpdate(item.product, {
             $inc: { 
               quantity: -item.quantity

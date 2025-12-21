@@ -37,7 +37,7 @@ const cartController = {
   // Add item to cart
   async addToCart(req, res) {
     try {
-      const { productId, quantity = 1, size } = req.body;
+      const { productId, quantity = 1, size, color } = req.body;
 
       if (!productId) {
         return res.status(400).json({ 
@@ -55,6 +55,40 @@ const cartController = {
         });
       }
 
+      // Validate variant availability if variants exist
+      if (product.variants && product.variants.length > 0) {
+        if (!size) {
+          return res.status(400).json({ 
+            status: 'error',
+            error: 'Size is required for this product' 
+          });
+        }
+
+        const variantStock = product.getVariantStock(size);
+        
+        if (variantStock === null) {
+          return res.status(400).json({ 
+            status: 'error',
+            error: 'Size not found for this product' 
+          });
+        }
+
+        if (variantStock < quantity) {
+          return res.status(400).json({ 
+            status: 'error',
+            error: `Only ${variantStock} items available in stock for size ${size}` 
+          });
+        }
+      } else {
+        // Legacy product without variants - use default size
+        if (!size && !product.size) {
+          return res.status(400).json({ 
+            status: 'error',
+            error: 'Size is required for this product' 
+          });
+        }
+      }
+
       let cart = await Cart.findOne({ userId: req.user.id });
       if (!cart) {
         cart = new Cart({ 
@@ -65,22 +99,38 @@ const cartController = {
         });
       }
 
-      // Check if product already exists in cart
-      const existingItemIndex = cart.items.findIndex(item => 
-        item.productId.toString() === productId && 
-        item.size === (size || product.size)
-      );
+      // Use product color (fixed color set)
+      const productColor = product.color || null;
+
+      // Check if product already exists in cart with same size
+      const existingItemIndex = cart.items.findIndex(item => {
+        const sameProduct = item.productId.toString() === productId;
+        const sameSize = item.size === (size || product.size);
+        return sameProduct && sameSize;
+      });
       
       if (existingItemIndex > -1) {
+        // Check stock before updating quantity
+        const newQuantity = cart.items[existingItemIndex].quantity + quantity;
+        if (product.variants && product.variants.length > 0) {
+          const variantStock = product.getVariantStock(size);
+          if (variantStock < newQuantity) {
+            return res.status(400).json({ 
+              status: 'error',
+              error: `Only ${variantStock} items available in stock for size ${size}` 
+            });
+          }
+        }
         // Update quantity if product exists
-        cart.items[existingItemIndex].quantity = quantity;
+        cart.items[existingItemIndex].quantity = newQuantity;
       } else {
         // Add new item if product doesn't exist in cart
         cart.items.push({ 
           productId: productId,
           product: productId,
           quantity: quantity,
-          size: size || product.size
+          size: size || product.size,
+          color: productColor
         });
       }
 
