@@ -34,6 +34,16 @@ const userSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  age: {
+    type: Number,
+    min: [13, 'Age must be at least 13'],
+    max: [120, 'Age must be less than 120']
+  },
+  gender: {
+    type: String,
+    enum: ['male', 'female', 'other', 'prefer-not-to-say'],
+    trim: true
+  },
   role: {
     type: String,
     enum: ['user', 'admin'],
@@ -70,6 +80,7 @@ const userSchema = new mongoose.Schema({
   avatar: String,
   bio: String,
   dateOfBirth: Date,
+  // Legacy single address (kept for backward compatibility)
   address: {
     street: String,
     city: String,
@@ -77,6 +88,61 @@ const userSchema = new mongoose.Schema({
     zipCode: String,
     country: String
   },
+  // Multiple addresses array
+  addresses: [{
+    _id: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: () => new mongoose.Types.ObjectId()
+    },
+    fullName: {
+      type: String,
+      required: [true, 'Full name is required for address'],
+      trim: true
+    },
+    phone: {
+      type: String,
+      required: [true, 'Phone number is required for address'],
+      trim: true
+    },
+    street: {
+      type: String,
+      required: [true, 'Street address is required'],
+      trim: true
+    },
+    city: {
+      type: String,
+      required: [true, 'City is required'],
+      trim: true
+    },
+    state: {
+      type: String,
+      required: [true, 'State is required'],
+      trim: true
+    },
+    zipCode: {
+      type: String,
+      required: [true, 'ZIP code is required'],
+      trim: true
+    },
+    country: {
+      type: String,
+      default: 'India',
+      trim: true
+    },
+    nearbyPlaces: {
+      type: String,
+      trim: true
+    },
+    isDefault: {
+      type: Boolean,
+      default: false
+    },
+    addressType: {
+      type: String,
+      enum: ['home', 'work', 'other'],
+      default: 'home'
+    }
+  }],
   
   // Preferences
   preferences: {

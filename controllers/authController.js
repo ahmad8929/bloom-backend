@@ -569,11 +569,38 @@ async sendResetOTP(req, res) {
   // ===========================
   async getMe(req, res) {
     try {
-      const user = await User.findById(req.user.id);
+      const user = await User.findById(req.user.id)
+        .select('-password -resetPasswordToken -resetPasswordExpire -resetPasswordOTP -resetPasswordOTPExpire -emailVerificationToken -emailVerificationExpire');
+
+      if (!user) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'User not found'
+        });
+      }
 
       res.json({
         status: 'success',
-        data: { user }
+        data: {
+          user: {
+            id: user._id,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            email: user.email,
+            phone: user.phone,
+            age: user.age,
+            gender: user.gender,
+            role: user.role,
+            isEmailVerified: user.isEmailVerified,
+            avatar: user.avatar,
+            bio: user.bio,
+            dateOfBirth: user.dateOfBirth,
+            lastLogin: user.lastLogin,
+            addresses: user.addresses || [],
+            createdAt: user.createdAt,
+            updatedAt: user.updatedAt
+          }
+        }
       });
     } catch (error) {
       console.error('Get me error:', error);
