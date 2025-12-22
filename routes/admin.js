@@ -21,7 +21,7 @@ router.patch('/orders/:id/status', adminAuth, adminController.updateOrderStatus)
 
 // Order approval/rejection
 router.patch('/orders/:id/approve', adminAuth, adminController.approveOrder);
-router.patch('/orders/:id/reject', adminController.rejectOrder);
+router.patch('/orders/:id/reject', adminAuth, adminController.rejectOrder);
 
 // Get orders by specific user
 router.get('/users/:userId/orders', adminAuth, adminController.getOrdersByUser);

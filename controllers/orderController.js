@@ -243,7 +243,11 @@ const orderController = {
         })
         .populate('user', 'firstName lastName email')
         .populate('adminApproval.approvedBy', 'firstName lastName')
-        .populate('adminApproval.rejectedBy', 'firstName lastName');
+        .populate('adminApproval.rejectedBy', 'firstName lastName')
+        .populate({
+          path: 'timeline.updatedBy',
+          select: 'firstName lastName'
+        });
 
       if (!order) {
         return res.status(404).json({
@@ -286,10 +290,58 @@ const orderController = {
       }
 
       // Check if user owns the order
-      if (order.user.toString() !== req.user.id) {
+      // Handle both ObjectId and populated user object
+      const orderUserId = order.user?._id || order.user; // Handle populated or ObjectId
+      const requestUserId = req.user.id;
+      
+      // Debug logging
+      console.log('Payment proof upload check:', {
+        orderId: req.params.id,
+        orderUserId: orderUserId?.toString(),
+        requestUserId: requestUserId?.toString(),
+        orderUserType: orderUserId?.constructor?.name,
+        reqUserType: requestUserId?.constructor?.name,
+        orderUserIsObject: typeof order.user === 'object' && order.user !== null && !order.user.equals,
+        orderUserHasId: !!(order.user?._id)
+      });
+
+      // Check if user owns the order - handle both ObjectId and string comparisons
+      if (!orderUserId || !requestUserId) {
+        console.error('Missing user IDs:', { orderUserId, requestUserId, orderUser: order.user });
         return res.status(403).json({
           status: 'error',
-          message: 'Access denied'
+          message: 'Access denied. Invalid user or order data.',
+          debug: process.env.NODE_ENV === 'development' ? {
+            hasOrderUser: !!orderUserId,
+            hasReqUser: !!requestUserId,
+            orderUser: order.user
+          } : undefined
+        });
+      }
+
+      // Compare using Mongoose equals if available, otherwise convert to strings
+      // Handle both ObjectId instances and string comparisons
+      let isOwner = false;
+      if (orderUserId.equals && typeof orderUserId.equals === 'function') {
+        // Both are ObjectIds, use equals method
+        isOwner = orderUserId.equals(requestUserId);
+      } else {
+        // Convert both to strings for comparison
+        isOwner = orderUserId.toString() === requestUserId.toString();
+      }
+
+      console.log('Ownership check result:', { isOwner, orderUserId: orderUserId.toString(), requestUserId: requestUserId.toString() });
+
+      if (!isOwner) {
+        return res.status(403).json({
+          status: 'error',
+          message: 'Access denied. You can only upload payment proof for your own orders.',
+          debug: process.env.NODE_ENV === 'development' ? {
+            orderUserId: orderUserId.toString(),
+            requestUserId: requestUserId.toString(),
+            orderUser: order.user,
+            reqUserId: req.user.id
+          } : undefined
         });
       }
 

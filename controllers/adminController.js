@@ -388,10 +388,22 @@ async toggleEmailVerification(req, res) {
         .limit(Number(limit))
         .lean();
 
+      // Ensure paymentProof is properly serialized (especially dates)
+      const serializedOrders = orders.map(order => {
+        if (order.paymentDetails && order.paymentDetails.paymentProof) {
+          // Ensure uploadedAt is properly serialized as ISO string
+          if (order.paymentDetails.paymentProof.uploadedAt) {
+            order.paymentDetails.paymentProof.uploadedAt = 
+              new Date(order.paymentDetails.paymentProof.uploadedAt).toISOString();
+          }
+        }
+        return order;
+      });
+
       res.json({
         status: 'success',
         data: {
-          orders,
+          orders: serializedOrders,
           pagination: {
             page: Number(page),
             limit: Number(limit),
@@ -460,11 +472,45 @@ async toggleEmailVerification(req, res) {
         });
       }
 
-      if (order.adminApproval.status !== 'pending') {
+      // Allow updating remarks for already approved orders, but prevent re-approval
+      if (order.adminApproval.status === 'rejected') {
         return res.status(400).json({
           status: 'error',
-          message: 'Order has already been processed'
+          message: 'Cannot approve a rejected order. Please reject it first or contact support.',
+          currentStatus: order.adminApproval.status
         });
+      }
+
+      // If already approved, only update remarks if provided
+      if (order.adminApproval.status === 'approved') {
+        if (remarks && remarks.trim()) {
+          // Update remarks for already approved order
+          order.adminApproval.remarks = remarks;
+          order.timeline.push({
+            status: order.status,
+            note: `Admin remarks updated: ${remarks}`,
+            timestamp: new Date(),
+            updatedBy: req.user.id
+          });
+          await order.save();
+          
+          await order.populate([
+            { path: 'user', select: 'firstName lastName email' },
+            { path: 'adminApproval.approvedBy', select: 'firstName lastName' }
+          ]);
+
+          return res.json({
+            status: 'success',
+            message: 'Remarks updated successfully',
+            data: { order }
+          });
+        } else {
+          return res.status(400).json({
+            status: 'error',
+            message: 'Order is already approved. Provide remarks to update them.',
+            currentStatus: order.adminApproval.status
+          });
+        }
       }
 
       order.adminApproval.status = 'approved';
