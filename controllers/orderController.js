@@ -3,6 +3,7 @@ const Order = require('../models/Order');
 const Cart = require('../models/Cart');
 const Product = require('../models/Product');
 const User = require('../models/User');
+const Coupon = require('../models/Coupon');
 const { sendEmail } = require('../utils/email');
 const { uploadToCloudinary } = require('../utils/cloudinary');
 const upload = require('../middlewares/upload');
@@ -11,7 +12,7 @@ const orderController = {
   // Create order
   async createOrder(req, res) {
     try {
-      const { shippingAddress, paymentMethod, paymentDetails } = req.body;
+      const { shippingAddress, paymentMethod, paymentDetails, couponCode } = req.body;
 
       // Get user's cart
       const cart = await Cart.findOne({ userId: req.user.id }).populate({
@@ -57,10 +58,47 @@ const orderController = {
       }
 
       // Calculate totals
-      const subtotal = cart.totalAmount;
-      const shipping = subtotal > 1000 ? 0 : 99; // Free shipping above ₹1000
-      const tax = Math.round(subtotal * 0.18); // 18% GST
-      const totalAmount = subtotal + shipping + tax;
+      const originalSubtotal = cart.totalAmount;
+      let discount = 0;
+      let coupon = null;
+
+      // Validate and apply coupon if provided
+      if (couponCode) {
+        coupon = await Coupon.findOne({ code: couponCode.toUpperCase() });
+        
+        if (!coupon) {
+          return res.status(400).json({
+            status: 'error',
+            message: 'Invalid coupon code'
+          });
+        }
+
+        // Check if coupon is valid
+        const validityCheck = coupon.isValid(req.user.id);
+        if (!validityCheck.valid) {
+          return res.status(400).json({
+            status: 'error',
+            message: validityCheck.message
+          });
+        }
+
+        // Calculate discount
+        const discountCalculation = coupon.calculateDiscount(originalSubtotal);
+        if (!discountCalculation.valid) {
+          return res.status(400).json({
+            status: 'error',
+            message: discountCalculation.message
+          });
+        }
+
+        discount = discountCalculation.discountAmount;
+      }
+
+      // Calculate subtotal after discount
+      const subtotalAfterDiscount = originalSubtotal - discount;
+      const shipping = subtotalAfterDiscount > 1000 ? 0 : 99; // Free shipping above ₹1000
+      const tax = Math.round(subtotalAfterDiscount * 0.18); // 18% GST
+      const totalAmount = subtotalAfterDiscount + shipping + tax;
 
       // Create order
       const order = new Order({
@@ -77,17 +115,19 @@ const orderController = {
         })),
         shippingAddress,
         paymentMethod,
-        subtotal,
+        subtotal: originalSubtotal, // Original subtotal before discount
+        discount,
         shipping,
         tax,
         totalAmount,
+        couponCode: couponCode ? couponCode.toUpperCase() : undefined,
         status: 'awaiting_approval', // Changed to awaiting_approval instead of pending
         adminApproval: {
           status: 'pending'
         },
         timeline: [{
           status: 'awaiting_approval',
-          note: 'Order created and awaiting admin approval',
+          note: couponCode ? `Order created with coupon ${couponCode.toUpperCase()} and awaiting admin approval` : 'Order created and awaiting admin approval',
           timestamp: new Date(),
           updatedBy: req.user.id
         }]
@@ -109,6 +149,19 @@ const orderController = {
 
       // Save order
       await order.save();
+
+      // Update coupon usage if coupon was applied
+      if (coupon) {
+        coupon.usageCount += 1;
+        coupon.usageHistory.push({
+          userId: req.user.id,
+          orderId: order._id,
+          discountAmount: discount,
+          orderAmount: cart.totalAmount,
+          usedAt: new Date()
+        });
+        await coupon.save();
+      }
 
       // Clear cart
       cart.items = [];

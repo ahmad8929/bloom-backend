@@ -18,6 +18,7 @@ const orderRoutes = require('./routes/orders');
 const adminRoutes = require('./routes/admin');
 const categoryRoutes = require('./routes/categories');
 const profileRoutes = require('./routes/profile');
+const couponRoutes = require('./routes/coupons');
 
 // Import custom middleware
 const errorHandler = require('./middlewares/errorHandler');
@@ -129,6 +130,7 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/profile', profileRoutes);
+app.use('/api/coupons', couponRoutes);
 
 // ======================
 // HEALTH
