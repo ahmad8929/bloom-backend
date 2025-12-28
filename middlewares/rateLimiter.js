@@ -15,7 +15,7 @@ const createRateLimit = ({
     // 🔴 CRITICAL FIX
     skip: (req) => {
       if (req.method === 'OPTIONS') return true;
-      if (req.path === '/api/health') return true;
+      if (req.path === '/health' || req.path === '/api/health') return true;
       return false;
     },
 
