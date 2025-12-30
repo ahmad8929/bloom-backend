@@ -151,14 +151,7 @@ const profileController = {
   // ===========================
   async addAddress(req, res) {
     try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Validation failed',
-          errors: errors.array()
-        });
-      }
+      // Validation removed - proceed directly
 
       const { fullName, phone, street, city, state, zipCode, country, nearbyPlaces, isDefault, addressType } = req.body;
       const user = await User.findById(req.user.id);
@@ -218,14 +211,7 @@ const profileController = {
   // ===========================
   async updateAddress(req, res) {
     try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Validation failed',
-          errors: errors.array()
-        });
-      }
+      // Validation removed - proceed directly
 
       const { addressId } = req.params;
       const { fullName, phone, street, city, state, zipCode, country, nearbyPlaces, isDefault, addressType } = req.body;
@@ -328,6 +314,7 @@ const profileController = {
 };
 
 module.exports = profileController;
+
 
 
 

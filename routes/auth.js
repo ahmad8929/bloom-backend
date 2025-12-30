@@ -54,7 +54,7 @@ const updatePasswordValidation = [
 ];
 
 // Public routes
-router.post('/signup', signupValidation, authController.signup);
+router.post('/signup', authController.signup);
 router.post('/login', loginValidation, authController.login);
 router.post('/logout', authController.logout);
 router.post('/refresh-token', authController.refreshToken);

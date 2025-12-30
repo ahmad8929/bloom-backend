@@ -50,11 +50,12 @@ router.put('/', updateProfileValidation, profileController.updateProfile);
 
 // Address routes
 router.get('/addresses', profileController.getAddresses);
-router.post('/addresses', addressValidation, profileController.addAddress);
-router.put('/addresses/:addressId', updateAddressValidation, profileController.updateAddress);
+router.post('/addresses', profileController.addAddress);
+router.put('/addresses/:addressId', profileController.updateAddress);
 router.delete('/addresses/:addressId', profileController.deleteAddress);
 
 module.exports = router;
+
 
 
 

@@ -27,15 +27,7 @@ const authController = {
   // ===========================
   async signup(req, res) {
     try {
-      const errors = validationResult(req);
-      if (!errors.isEmpty()) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Validation failed',
-          errors: errors.array()
-        });
-      }
-
+      // Validation removed - proceed directly
       const { firstName, lastName, email, password, phone } = req.body;
 
       const existingUser = await User.findOne({ email });
