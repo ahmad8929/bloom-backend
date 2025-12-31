@@ -32,14 +32,15 @@ const auth = async (req, res, next) => {
       });
     }
 
-    // *** CRITICAL FIX: Check email verification ***
-    if (!user.isEmailVerified) {
-      return res.status(401).json({
-        status: 'error',
-        message: 'Email verification required. Please verify your email address.',
-        code: 'EMAIL_NOT_VERIFIED'
-      });
-    }
+    // TEMPORARY: Email verification check disabled
+    // TODO: Re-enable email verification check when email functionality is fixed
+    // if (!user.isEmailVerified) {
+    //   return res.status(401).json({
+    //     status: 'error',
+    //     message: 'Email verification required. Please verify your email address.',
+    //     code: 'EMAIL_NOT_VERIFIED'
+    //   });
+    // }
 
     // Add user info to request
     req.user = {

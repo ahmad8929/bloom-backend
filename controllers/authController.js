@@ -46,37 +46,49 @@ const authController = {
         phone
       });
 
-      const verificationToken = crypto.randomBytes(32).toString('hex');
-      user.emailVerificationToken = verificationToken;
-      user.emailVerificationExpire = Date.now() + 24 * 60 * 60 * 1000;
+      // TEMPORARY: Email verification disabled - auto-verify and auto-login
+      // TODO: Re-enable email verification when email functionality is fixed
+      // const verificationToken = crypto.randomBytes(32).toString('hex');
+      // user.emailVerificationToken = verificationToken;
+      // user.emailVerificationExpire = Date.now() + 24 * 60 * 60 * 1000;
+      
+      // Auto-verify email (temporary)
+      user.isEmailVerified = true;
+      user.emailVerificationToken = undefined;
+      user.emailVerificationExpire = undefined;
 
       await user.save();
 
-      try {
-        const verificationUrl =
-          `${process.env.FRONTEND_URL.replace(/\/$/, '')}/verify-email/${verificationToken}`;
+      // TEMPORARY: Email sending disabled
+      // TODO: Re-enable email sending when email functionality is fixed
+      // try {
+      //   const verificationUrl =
+      //     `${process.env.FRONTEND_URL.replace(/\/$/, '')}/verify-email/${verificationToken}`;
+      //
+      //   await sendEmail({
+      //     to: user.email,
+      //     subject: 'Email Verification',
+      //     template: 'emailVerification',
+      //     context: {
+      //       name: user.firstName,
+      //       verificationUrl
+      //     }
+      //   });
+      // } catch (emailError) {
+      //   console.error('Signup verification email failed:', emailError);
+      //   return res.status(500).json({
+      //     status: 'error',
+      //     message: 'Failed to send verification email',
+      //     error: formatEmailError(emailError)
+      //   });
+      // }
 
-        await sendEmail({
-          to: user.email,
-          subject: 'Email Verification',
-          template: 'emailVerification',
-          context: {
-            name: user.firstName,
-            verificationUrl
-          }
-        });
-      } catch (emailError) {
-        console.error('Signup verification email failed:', emailError);
-        return res.status(500).json({
-          status: 'error',
-          message: 'Failed to send verification email',
-          error: formatEmailError(emailError)
-        });
-      }
+      // Generate tokens for auto-login (temporary)
+      const { accessToken, refreshToken } = generateTokens(user._id);
 
       res.status(201).json({
         status: 'success',
-        message: 'User created successfully. Please verify your email.',
+        message: 'Account created successfully. You are now logged in.',
         data: {
           user: {
             id: user._id,
@@ -85,7 +97,9 @@ const authController = {
             email: user.email,
             role: user.role,
             isEmailVerified: user.isEmailVerified
-          }
+          },
+          accessToken,
+          refreshToken
         }
       });
     } catch (error) {
@@ -129,13 +143,15 @@ const authController = {
         });
       }
 
-      if (!user.isEmailVerified) {
-        return res.status(401).json({
-          status: 'error',
-          message: 'Please verify your email before login',
-          code: 'EMAIL_NOT_VERIFIED'
-        });
-      }
+      // TEMPORARY: Email verification check disabled
+      // TODO: Re-enable email verification check when email functionality is fixed
+      // if (!user.isEmailVerified) {
+      //   return res.status(401).json({
+      //     status: 'error',
+      //     message: 'Please verify your email before login',
+      //     code: 'EMAIL_NOT_VERIFIED'
+      //   });
+      // }
 
       const isPasswordValid = await user.comparePassword(password);
       if (!isPasswordValid) {
@@ -218,13 +234,15 @@ const authController = {
         });
       }
 
-      if (!user.isEmailVerified) {
-        return res.status(401).json({
-          status: 'error',
-          message: 'Email verification required',
-          code: 'EMAIL_NOT_VERIFIED'
-        });
-      }
+      // TEMPORARY: Email verification check disabled
+      // TODO: Re-enable email verification check when email functionality is fixed
+      // if (!user.isEmailVerified) {
+      //   return res.status(401).json({
+      //     status: 'error',
+      //     message: 'Email verification required',
+      //     code: 'EMAIL_NOT_VERIFIED'
+      //   });
+      // }
 
       const tokens = generateTokens(user._id);
 

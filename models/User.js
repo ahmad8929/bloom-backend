@@ -27,7 +27,9 @@ const userSchema = new mongoose.Schema({
   password: {
     type: String,
     required: [true, 'Password is required'],
-    minlength: [8, 'Password must be at least 8 characters'],
+    // TEMPORARY: Password validation removed to match signup form
+    // TODO: Re-enable password validation when form validation is restored
+    // minlength: [8, 'Password must be at least 8 characters'],
     select: false // Don't include password in queries by default
   },
   phone: {
