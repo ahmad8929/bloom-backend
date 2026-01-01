@@ -35,19 +35,19 @@ const productSchema = new mongoose.Schema({
   },
   material: {
     type: String,
-    required: [true, 'Product material is required'],
+    required: false,
     trim: true
   },
   // NEW: Category field
   category: {
     type: String,
     enum: ['Cordset', 'Anarkali', 'Suite', 'Kurti', 'Saree', 'Lehenga', 'Western Dress'],
-    required: [true, 'Product category is required'],
+    required: false,
     trim: true
   },
   careInstructions: {
     type: String,
-    required: [true, 'Care instructions are required']
+    required: false
   },
   isNewArrival: {
     type: Boolean,
@@ -62,23 +62,27 @@ const productSchema = new mongoose.Schema({
     alt: String,
     isPrimary: { type: Boolean, default: false }
   }],
-  // Fixed color set - product has one color from predefined options
+  // Primary color (first color from colors array, for backward compatibility)
   color: {
     name: {
       type: String,
-      enum: ['Red', 'Blue', 'Black', 'White', 'Green', 'Pink', 'Yellow'],
       required: false
     },
     hexCode: {
       type: String,
-      enum: ['#EF4444', '#3B82F6', '#000000', '#FFFFFF', '#10B981', '#EC4899', '#FBBF24'],
       required: false
     }
   },
-  // Legacy colors array for backward compatibility
+  // Colors array - supports multiple colors
   colors: [{
-    name: String,
-    hexCode: String
+    name: {
+      type: String,
+      required: true
+    },
+    hexCode: {
+      type: String,
+      required: true
+    }
   }],
   // Product variants: size-based with individual stock quantities
   variants: [{

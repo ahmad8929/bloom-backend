@@ -28,16 +28,30 @@ const productController = {
       try {
         // Size filter - check variants if they exist, otherwise check legacy size field
         if (size && size !== 'all') {
-          // Filter by variants that have this size with stock > 0
           filter.$or = [
             { 'variants.size': size, 'variants.stock': { $gt: 0 } },
             { size: size }
           ];
         }
         
-        // Color filter - product-level color
+        // Color filter - check both colors array and single color field
         if (color && color !== 'all') {
-          filter['color.name'] = color;
+          // Use $or for color to check both colors array and single color field
+          const colorOr = [
+            { 'colors.name': color },
+            { 'color.name': color }
+          ];
+          
+          // If we already have $or for size, we need to combine them with $and
+          if (filter.$or) {
+            filter.$and = [
+              { $or: filter.$or },
+              { $or: colorOr }
+            ];
+            delete filter.$or;
+          } else {
+            filter.$or = colorOr;
+          }
         }
         
         if (material) {
@@ -364,7 +378,7 @@ const productController = {
       console.log('Creating product with data:', productData);
       console.log('Files received:', req.files?.length || 0);
 
-      // Handle image uploads
+      // Handle image uploads - at least one image is required
       let uploadedImages = [];
       if (req.files && req.files.length > 0) {
         try {
@@ -388,39 +402,36 @@ const productController = {
           });
         }
       } else {
-        // Default placeholder image if no images uploaded
-        uploadedImages = [{
-          url: 'https://via.placeholder.com/400x400?text=No+Image',
-          alt: productData.name || 'Product image',
-          isPrimary: true
-        }];
+        // At least one image is required
+        return res.status(400).json({
+          status: 'error',
+          message: 'At least one product image is required'
+        });
       }
 
-      // Parse colors if they come as strings
+      // Parse colors array if it comes as string
       if (typeof productData.colors === 'string') {
         try {
           productData.colors = JSON.parse(productData.colors);
         } catch (e) {
-          productData.colors = [{ name: 'Default', hexCode: '#000000' }];
+          productData.colors = [];
         }
       }
+      
+      // Ensure colors is an array
+      if (!Array.isArray(productData.colors)) {
+        productData.colors = [];
+      }
 
-      // Parse color if it comes as string
-      if (typeof productData.color === 'string') {
+      // Set primary color from first color in array (for backward compatibility)
+      if (productData.colors && productData.colors.length > 0) {
+        productData.color = productData.colors[0];
+      } else if (typeof productData.color === 'string') {
+        // Legacy: parse single color if provided as string
         try {
           productData.color = JSON.parse(productData.color);
         } catch (e) {
-          // If parsing fails, try to match color name
-          const colorMap = {
-            'Red': { name: 'Red', hexCode: '#EF4444' },
-            'Blue': { name: 'Blue', hexCode: '#3B82F6' },
-            'Black': { name: 'Black', hexCode: '#000000' },
-            'White': { name: 'White', hexCode: '#FFFFFF' },
-            'Green': { name: 'Green', hexCode: '#10B981' },
-            'Pink': { name: 'Pink', hexCode: '#EC4899' },
-            'Yellow': { name: 'Yellow', hexCode: '#FBBF24' }
-          };
-          productData.color = colorMap[productData.color] || null;
+          productData.color = null;
         }
       }
 
@@ -467,6 +478,34 @@ const productController = {
 
       if (typeof productData.isSale === 'string') {
         productData.isSale = productData.isSale === 'true';
+      }
+
+      // Validate comparePrice if provided
+      if (productData.comparePrice !== undefined && productData.comparePrice !== null) {
+        const comparePrice = Number(productData.comparePrice);
+        const price = Number(productData.price);
+        
+        if (comparePrice < 0) {
+          return res.status(400).json({
+            status: 'error',
+            message: 'Compare price cannot be negative'
+          });
+        }
+        
+        if (comparePrice <= price) {
+          return res.status(400).json({
+            status: 'error',
+            message: 'Compare price must be greater than normal price'
+          });
+        }
+      }
+
+      // Validate price is not negative
+      if (productData.price !== undefined && Number(productData.price) < 0) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Price cannot be negative'
+        });
       }
 
       // Set final data
@@ -554,36 +593,85 @@ const productController = {
         }
       }
 
-      // Set images if we have any
-      if (finalImages.length > 0) {
+      // Get existing product for validation
+      const existingProduct = await Product.findById(req.params.id);
+      if (!existingProduct) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Product not found'
+        });
+      }
+
+      // At least one image is required
+      if (finalImages.length === 0) {
+        // Check if product already has images
+        if (!existingProduct.images || existingProduct.images.length === 0) {
+          return res.status(400).json({
+            status: 'error',
+            message: 'At least one product image is required'
+          });
+        }
+        // Keep existing images if no new ones provided
+      } else {
         productData.images = finalImages;
       }
 
-      // Parse colors if they come as strings
+      // Validate comparePrice if provided
+      if (productData.comparePrice !== undefined && productData.comparePrice !== null) {
+        const comparePrice = Number(productData.comparePrice);
+        const price = Number(productData.price || existingProduct.price);
+        
+        if (comparePrice < 0) {
+          return res.status(400).json({
+            status: 'error',
+            message: 'Compare price cannot be negative'
+          });
+        }
+        
+        if (comparePrice <= price) {
+          return res.status(400).json({
+            status: 'error',
+            message: 'Compare price must be greater than normal price'
+          });
+        }
+      }
+
+      // Validate price is not negative
+      if (productData.price !== undefined && Number(productData.price) < 0) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Price cannot be negative'
+        });
+      }
+
+      // Parse colors array if it comes as string
       if (typeof productData.colors === 'string') {
         try {
           productData.colors = JSON.parse(productData.colors);
         } catch (e) {
-          delete productData.colors;
+          // Keep existing colors if parsing fails
+          if (existingProduct.colors) {
+            productData.colors = existingProduct.colors;
+          } else {
+            productData.colors = [];
+          }
         }
       }
+      
+      // Ensure colors is an array
+      if (!Array.isArray(productData.colors)) {
+        productData.colors = existingProduct?.colors || [];
+      }
 
-      // Parse color if it comes as string
-      if (typeof productData.color === 'string') {
+      // Set primary color from first color in array (for backward compatibility)
+      if (productData.colors && productData.colors.length > 0) {
+        productData.color = productData.colors[0];
+      } else if (typeof productData.color === 'string') {
+        // Legacy: parse single color if provided as string
         try {
           productData.color = JSON.parse(productData.color);
         } catch (e) {
-          // If parsing fails, try to match color name
-          const colorMap = {
-            'Red': { name: 'Red', hexCode: '#EF4444' },
-            'Blue': { name: 'Blue', hexCode: '#3B82F6' },
-            'Black': { name: 'Black', hexCode: '#000000' },
-            'White': { name: 'White', hexCode: '#FFFFFF' },
-            'Green': { name: 'Green', hexCode: '#10B981' },
-            'Pink': { name: 'Pink', hexCode: '#EC4899' },
-            'Yellow': { name: 'Yellow', hexCode: '#FBBF24' }
-          };
-          productData.color = colorMap[productData.color] || null;
+          productData.color = existingProduct?.color || null;
         }
       }
 
