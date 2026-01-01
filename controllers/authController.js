@@ -128,11 +128,13 @@ const authController = {
 
       const { email, password } = req.body;
 
-      const user = await User.findOne({ email }).select('+password');
+      // First, check if email exists (without selecting password for security)
+      const user = await User.findOne({ email });
       if (!user) {
         return res.status(401).json({
           status: 'error',
-          message: 'Invalid credentials'
+          message: 'This email is not registered. Please sign up first.',
+          code: 'EMAIL_NOT_FOUND'
         });
       }
 
@@ -153,11 +155,14 @@ const authController = {
       //   });
       // }
 
-      const isPasswordValid = await user.comparePassword(password);
+      // Now check password (need to select password field for comparison)
+      const userWithPassword = await User.findOne({ email }).select('+password');
+      const isPasswordValid = await userWithPassword.comparePassword(password);
       if (!isPasswordValid) {
         return res.status(401).json({
           status: 'error',
-          message: 'Invalid credentials'
+          message: 'Incorrect password.',
+          code: 'INCORRECT_PASSWORD'
         });
       }
 
