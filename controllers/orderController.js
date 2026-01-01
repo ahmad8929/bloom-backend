@@ -59,8 +59,19 @@ const orderController = {
 
       // Calculate totals
       const originalSubtotal = cart.totalAmount;
-      let discount = 0;
+      let automaticDiscount = 0;
+      let couponDiscount = 0;
       let coupon = null;
+
+      // Apply automatic discount based on subtotal (before coupon)
+      // If subtotal > ₹20,000: 10% discount
+      // If subtotal > ₹10,000: 4% discount
+      // Only highest eligible discount applies
+      if (originalSubtotal > 20000) {
+        automaticDiscount = Math.round(originalSubtotal * 0.10);
+      } else if (originalSubtotal > 10000) {
+        automaticDiscount = Math.round(originalSubtotal * 0.04);
+      }
 
       // Validate and apply coupon if provided
       if (couponCode) {
@@ -82,8 +93,9 @@ const orderController = {
           });
         }
 
-        // Calculate discount
-        const discountCalculation = coupon.calculateDiscount(originalSubtotal);
+        // Calculate coupon discount on subtotal after automatic discount
+        const subtotalAfterAutoDiscount = originalSubtotal - automaticDiscount;
+        const discountCalculation = coupon.calculateDiscount(subtotalAfterAutoDiscount);
         if (!discountCalculation.valid) {
           return res.status(400).json({
             status: 'error',
@@ -91,14 +103,29 @@ const orderController = {
           });
         }
 
-        discount = discountCalculation.discountAmount;
+        couponDiscount = discountCalculation.discountAmount;
       }
 
-      // Calculate subtotal after discount
-      const subtotalAfterDiscount = originalSubtotal - discount;
-      const shipping = subtotalAfterDiscount > 1000 ? 0 : 99; // Free shipping above ₹1000
-      const tax = Math.round(subtotalAfterDiscount * 0.18); // 18% GST
-      const totalAmount = subtotalAfterDiscount + shipping + tax;
+      // Total discount (automatic + coupon)
+      const totalDiscount = automaticDiscount + couponDiscount;
+      const subtotalAfterDiscount = originalSubtotal - totalDiscount;
+
+      // Calculate shipping and advance payment based on payment method
+      let shipping = 0;
+      let advancePayment = 0;
+
+      if (paymentMethod === 'cod') {
+        // COD: ₹199 shipping + ₹300 advance payment (advance payment NOT included in total)
+        shipping = 199;
+        advancePayment = 300;
+      } else {
+        // Online payment (upi, card): Free shipping
+        shipping = 0;
+        advancePayment = 0;
+      }
+
+      // Calculate final total (advance payment is NOT included - it's paid separately)
+      const totalAmount = subtotalAfterDiscount + shipping;
 
       // Create order
       const order = new Order({
@@ -116,9 +143,10 @@ const orderController = {
         shippingAddress,
         paymentMethod,
         subtotal: originalSubtotal, // Original subtotal before discount
-        discount,
+        discount: totalDiscount, // Total discount (automatic + coupon)
         shipping,
-        tax,
+        advancePayment,
+        tax: 0, // No tax as per new requirements
         totalAmount,
         couponCode: couponCode ? couponCode.toUpperCase() : undefined,
         status: 'awaiting_approval', // Changed to awaiting_approval instead of pending
@@ -156,7 +184,7 @@ const orderController = {
         coupon.usageHistory.push({
           userId: req.user.id,
           orderId: order._id,
-          discountAmount: discount,
+          discountAmount: couponDiscount,
           orderAmount: cart.totalAmount,
           usedAt: new Date()
         });

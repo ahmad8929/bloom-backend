@@ -109,6 +109,10 @@ const orderSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  advancePayment: {
+    type: Number,
+    default: 0
+  },
   totalAmount: {
     type: Number,
     required: true
