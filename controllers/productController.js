@@ -376,14 +376,19 @@ const productController = {
     try {
       const productData = req.body;
       console.log('Creating product with data:', productData);
-      console.log('Files received:', req.files?.length || 0);
+      
+      // Handle files - req.files is now an object with 'images' and 'video' arrays
+      const imageFiles = req.files?.images || [];
+      const videoFile = req.files?.video?.[0] || null;
+      
+      console.log('Files received - Images:', imageFiles.length, 'Video:', videoFile ? 'Yes' : 'No');
 
       // Handle image uploads - at least one image is required
       let uploadedImages = [];
-      if (req.files && req.files.length > 0) {
+      if (imageFiles && imageFiles.length > 0) {
         try {
-          console.log('Uploading', req.files.length, 'images to Cloudinary...');
-          const imagePromises = req.files.map(file => 
+          console.log('Uploading', imageFiles.length, 'images to Cloudinary...');
+          const imagePromises = imageFiles.map(file => 
             uploadToCloudinary(file.buffer, 'products')
           );
           const cloudinaryResults = await Promise.all(imagePromises);
@@ -407,6 +412,23 @@ const productController = {
           status: 'error',
           message: 'At least one product image is required'
         });
+      }
+
+      // Handle video upload (optional)
+      let uploadedVideo = null;
+      if (videoFile) {
+        try {
+          console.log('Uploading video to Cloudinary...');
+          const videoResult = await uploadToCloudinary(videoFile.buffer, 'products/videos');
+          uploadedVideo = videoResult.secure_url;
+          console.log('Video uploaded successfully');
+        } catch (uploadError) {
+          console.error('Video upload error:', uploadError);
+          return res.status(400).json({
+            status: 'error',
+            message: 'Failed to upload video: ' + uploadError.message
+          });
+        }
       }
 
       // Parse colors array if it comes as string
@@ -510,6 +532,9 @@ const productController = {
 
       // Set final data
       productData.images = uploadedImages;
+      if (uploadedVideo) {
+        productData.video = uploadedVideo;
+      }
 
       // Create product
       const product = new Product(productData);
@@ -548,6 +573,10 @@ const productController = {
       const productData = req.body;
       console.log('Updating product with data:', productData);
 
+      // Handle files - req.files is now an object with 'images' and 'video' arrays
+      const imageFiles = req.files?.images || [];
+      const videoFile = req.files?.video?.[0] || null;
+
       // Handle existing images
       let finalImages = [];
       
@@ -569,10 +598,10 @@ const productController = {
       }
 
       // Handle new image uploads
-      if (req.files && req.files.length > 0) {
+      if (imageFiles && imageFiles.length > 0) {
         try {
-          console.log('Uploading', req.files.length, 'new images to Cloudinary...');
-          const imagePromises = req.files.map(file => 
+          console.log('Uploading', imageFiles.length, 'new images to Cloudinary...');
+          const imagePromises = imageFiles.map(file => 
             uploadToCloudinary(file.buffer, 'products')
           );
           const cloudinaryResults = await Promise.all(imagePromises);
@@ -591,6 +620,26 @@ const productController = {
             message: 'Failed to upload images: ' + uploadError.message
           });
         }
+      }
+
+      // Handle video upload (optional)
+      let uploadedVideo = null;
+      if (videoFile) {
+        try {
+          console.log('Uploading video to Cloudinary...');
+          const videoResult = await uploadToCloudinary(videoFile.buffer, 'products/videos');
+          uploadedVideo = videoResult.secure_url;
+          console.log('Video uploaded successfully');
+        } catch (uploadError) {
+          console.error('Video upload error:', uploadError);
+          return res.status(400).json({
+            status: 'error',
+            message: 'Failed to upload video: ' + uploadError.message
+          });
+        }
+      } else if (productData.existingVideo) {
+        // Keep existing video if no new one is uploaded
+        uploadedVideo = productData.existingVideo;
       }
 
       // Get existing product for validation
@@ -614,6 +663,11 @@ const productController = {
         // Keep existing images if no new ones provided
       } else {
         productData.images = finalImages;
+      }
+
+      // Set video if uploaded or existing
+      if (uploadedVideo !== null) {
+        productData.video = uploadedVideo;
       }
 
       // Validate comparePrice if provided

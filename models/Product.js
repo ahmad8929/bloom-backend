@@ -62,6 +62,12 @@ const productSchema = new mongoose.Schema({
     alt: String,
     isPrimary: { type: Boolean, default: false }
   }],
+  // Optional product video URL
+  video: {
+    type: String,
+    required: false,
+    trim: true
+  },
   // Primary color (first color from colors array, for backward compatibility)
   color: {
     name: {
