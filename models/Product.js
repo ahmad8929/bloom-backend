@@ -38,6 +38,11 @@ const productSchema = new mongoose.Schema({
     required: false,
     trim: true
   },
+  // Material tags array - supports multiple material options
+  materials: [{
+    type: String,
+    trim: true
+  }],
   // NEW: Category field
   category: {
     type: String,

@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Cart = require('../models/Cart');
 const Product = require('../models/Product');
 
@@ -37,12 +38,20 @@ const cartController = {
   // Add item to cart
   async addToCart(req, res) {
     try {
-      const { productId, quantity = 1, size, color } = req.body;
+      const { productId, quantity = 1, size, color, material } = req.body;
 
       if (!productId) {
         return res.status(400).json({ 
           status: 'error',
           error: 'Product ID is required' 
+        });
+      }
+
+      // Validate productId
+      if (!productId || !mongoose.Types.ObjectId.isValid(productId)) {
+        return res.status(400).json({ 
+          status: 'error',
+          error: 'Invalid product ID' 
         });
       }
 
@@ -102,11 +111,41 @@ const cartController = {
       // Use product color (fixed color set)
       const productColor = product.color || null;
 
-      // Check if product already exists in cart with same size
+      // Validate material if product has materials array
+      if (product.materials && Array.isArray(product.materials) && product.materials.length > 0) {
+        if (material && !product.materials.includes(material)) {
+          return res.status(400).json({ 
+            status: 'error',
+            error: `Invalid material. Available materials: ${product.materials.join(', ')}` 
+          });
+        }
+      } else if (material) {
+        // Product doesn't have materials array, but material was provided
+        return res.status(400).json({ 
+          status: 'error',
+          error: 'This product does not support material selection' 
+        });
+      }
+
+      // Check if product already exists in cart with same size and material
+      // Material comparison: different materials = separate cart items
       const existingItemIndex = cart.items.findIndex(item => {
-        const sameProduct = item.productId.toString() === productId;
+        const sameProduct = item.productId && item.productId.toString() === product._id.toString();
         const sameSize = item.size === (size || product.size);
-        return sameProduct && sameSize;
+        
+        // Normalize materials: treat null/undefined/empty string as "no material"
+        // Any actual material value must match exactly for items to be considered the same
+        const normalizeMaterial = (mat) => {
+          if (mat == null) return null;
+          const trimmed = String(mat).trim();
+          return trimmed === '' ? null : trimmed;
+        };
+        
+        const itemMaterial = normalizeMaterial(item.material);
+        const newMaterial = normalizeMaterial(material);
+        const sameMaterial = itemMaterial === newMaterial;
+        
+        return sameProduct && sameSize && sameMaterial;
       });
       
       if (existingItemIndex > -1) {
@@ -125,14 +164,54 @@ const cartController = {
         cart.items[existingItemIndex].quantity = newQuantity;
       } else {
         // Add new item if product doesn't exist in cart
-        cart.items.push({ 
-          productId: productId,
-          product: productId,
+        // Use the product's _id directly (already an ObjectId from MongoDB)
+        const productObjectId = product._id;
+        
+        if (!productObjectId) {
+          return res.status(400).json({ 
+            status: 'error',
+            error: 'Product ID is missing' 
+          });
+        }
+        
+        // Create the cart item with proper ObjectId references
+        // Ensure both productId and product are set to the same ObjectId
+        const newItem = {
+          productId: productObjectId,
+          product: productObjectId, // Both must reference the same ObjectId
           quantity: quantity,
-          size: size || product.size,
-          color: productColor
-        });
+          size: size || product.size || undefined,
+          color: productColor || undefined,
+          material: material || undefined
+        };
+        
+        // Validate the new item before pushing
+        if (!newItem.productId || !newItem.product) {
+          return res.status(500).json({ 
+            status: 'error',
+            error: 'Failed to create cart item: invalid product reference' 
+          });
+        }
+        
+        cart.items.push(newItem);
+        
+        // Mark the items array as modified to ensure Mongoose saves it
+        cart.markModified('items');
       }
+
+      // Validate all items have valid product references before saving
+      // Filter out any items that might have null product references
+      cart.items = cart.items.filter(item => {
+        const hasValidProduct = item.productId && item.product;
+        if (!hasValidProduct) {
+          console.warn('Removing cart item with invalid product reference:', {
+            productId: item.productId,
+            product: item.product,
+            itemId: item._id
+          });
+        }
+        return hasValidProduct;
+      });
 
       await cart.save();
       
