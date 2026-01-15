@@ -17,6 +17,7 @@ const productController = {
         category,
         isNewArrival,
         isSale,
+        isStretched,
         search
       } = req.query;
 
@@ -67,6 +68,7 @@ const productController = {
         
         if (isNewArrival !== undefined) filter.isNewArrival = isNewArrival === 'true';
         if (isSale !== undefined) filter.isSale = isSale === 'true';
+        if (isStretched !== undefined) filter.isStretched = isStretched === 'true';
         
         if (minPrice || maxPrice) {
           filter.price = {};
@@ -159,7 +161,8 @@ const productController = {
         size,
         material,
         isNewArrival,
-        isSale
+        isSale,
+        isStretched
       } = req.query;
 
       console.log('getProductsByCategory called with category:', categoryId);
@@ -174,6 +177,7 @@ const productController = {
       if (material) filter.material = { $regex: new RegExp(material, 'i') };
       if (isNewArrival !== undefined) filter.isNewArrival = isNewArrival === 'true';
       if (isSale !== undefined) filter.isSale = isSale === 'true';
+      if (isStretched !== undefined) filter.isStretched = isStretched === 'true';
       
       if (minPrice || maxPrice) {
         filter.price = {};
@@ -502,6 +506,10 @@ const productController = {
         productData.isSale = productData.isSale === 'true';
       }
 
+      if (typeof productData.isStretched === 'string') {
+        productData.isStretched = productData.isStretched === 'true';
+      }
+
       // Validate comparePrice if provided
       if (productData.comparePrice !== undefined && productData.comparePrice !== null) {
         const comparePrice = Number(productData.comparePrice);
@@ -763,6 +771,10 @@ const productController = {
         productData.isSale = productData.isSale === 'true';
       }
 
+      if (typeof productData.isStretched === 'string') {
+        productData.isStretched = productData.isStretched === 'true';
+      }
+
       // Remove existingImages from update data
       delete productData.existingImages;
 
@@ -879,7 +891,7 @@ const productController = {
   // Search products (updated to include category)
   async searchProducts(req, res) {
     try {
-      const { q, page = 1, limit = 20, size, material, category, isNewArrival, isSale } = req.query;
+      const { q, page = 1, limit = 20, size, material, category, isNewArrival, isSale, isStretched } = req.query;
 
       if (!q) {
         return res.status(400).json({
@@ -903,6 +915,7 @@ const productController = {
       if (category) filter.category = { $regex: category, $options: 'i' }; // NEW: Category filter
       if (isNewArrival !== undefined) filter.isNewArrival = isNewArrival === 'true';
       if (isSale !== undefined) filter.isSale = isSale === 'true';
+      if (isStretched !== undefined) filter.isStretched = isStretched === 'true';
 
       const skip = (page - 1) * limit;
       const total = await Product.countDocuments(filter);

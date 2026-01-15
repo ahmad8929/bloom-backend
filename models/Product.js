@@ -57,6 +57,10 @@ const productSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  isStretched: {
+    type: Boolean,
+    default: false
+  },
   images: [{
     url: { type: String, required: true },
     alt: String,
@@ -195,6 +199,7 @@ productSchema.index({ material: 1 });
 productSchema.index({ category: 1 }); // NEW: Category index
 productSchema.index({ isNewArrival: 1 });
 productSchema.index({ isSale: 1 });
+productSchema.index({ isStretched: 1 });
 productSchema.index({ createdAt: -1 });
 productSchema.index({ 'variants.size': 1 });
 productSchema.index({ 'variants.stock': 1 });
