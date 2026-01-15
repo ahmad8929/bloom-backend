@@ -50,7 +50,7 @@ const orderSchema = new mongoose.Schema({
   },
   paymentMethod: {
     type: String,
-    enum: ['upi', 'card', 'cod'],
+    enum: ['upi', 'card', 'cod', 'cashfree'],
     required: true
   },
   paymentStatus: {
@@ -68,7 +68,16 @@ const orderSchema = new mongoose.Schema({
       url: String,
       publicId: String,
       uploadedAt: { type: Date, default: Date.now }
-    }
+    },
+    // Cashfree payment details
+    cashfreeSessionId: String,
+    cashfreeOrderId: String,
+    cashfreePaymentId: String,
+    cashfreeTransactionId: String,
+    cashfreePaymentMethod: String,
+    cashfreePaymentStatus: String,
+    cashfreeAmount: Number,
+    cashfreeCurrency: String
   },
   status: {
     type: String,
