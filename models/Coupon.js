@@ -199,12 +199,3 @@ couponSchema.pre('save', function(next) {
 });
 
 module.exports = mongoose.model('Coupon', couponSchema);
-
-
-
-
-
-
-
-
-

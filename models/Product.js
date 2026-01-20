@@ -38,6 +38,11 @@ const productSchema = new mongoose.Schema({
     required: false,
     trim: true
   },
+  // Material tags array - supports multiple material options
+  materials: [{
+    type: String,
+    trim: true
+  }],
   // NEW: Category field
   category: {
     type: String,
@@ -54,6 +59,10 @@ const productSchema = new mongoose.Schema({
     default: false
   },
   isSale: {
+    type: Boolean,
+    default: false
+  },
+  isStretched: {
     type: Boolean,
     default: false
   },
@@ -195,6 +204,7 @@ productSchema.index({ material: 1 });
 productSchema.index({ category: 1 }); // NEW: Category index
 productSchema.index({ isNewArrival: 1 });
 productSchema.index({ isSale: 1 });
+productSchema.index({ isStretched: 1 });
 productSchema.index({ createdAt: -1 });
 productSchema.index({ 'variants.size': 1 });
 productSchema.index({ 'variants.stock': 1 });

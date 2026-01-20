@@ -110,6 +110,14 @@ const orderController = {
       const totalDiscount = automaticDiscount + couponDiscount;
       const subtotalAfterDiscount = originalSubtotal - totalDiscount;
 
+      // Prevent direct creation of cashfree orders - they should be created via payment session
+      if (paymentMethod === 'cashfree') {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Cashfree orders must be created through payment session. Please use /api/payments/cashfree/create-session endpoint.'
+        });
+      }
+
       // Calculate shipping and advance payment based on payment method
       let shipping = 0;
       let advancePayment = 0;
@@ -161,7 +169,7 @@ const orderController = {
         }]
       });
 
-      // Handle payment details for UPI
+      // Handle payment details based on payment method
       if (paymentMethod === 'upi' && paymentDetails) {
         order.paymentDetails = {
           payerName: paymentDetails.payerName,
@@ -171,7 +179,20 @@ const orderController = {
           amount: paymentDetails.amount
         };
         order.paymentStatus = 'completed';
+      } else if (paymentMethod === 'card' && paymentDetails) {
+        // Card payment with manual proof upload
+        order.paymentDetails = {
+          payerName: paymentDetails.payerName,
+          transactionId: paymentDetails.transactionId,
+          paymentDate: paymentDetails.paymentDate,
+          paymentTime: paymentDetails.paymentTime,
+          amount: paymentDetails.amount
+        };
+        order.paymentStatus = 'completed';
       } else if (paymentMethod === 'cod') {
+        order.paymentStatus = 'pending';
+      } else {
+        // Default for other payment methods (should not reach here for cashfree)
         order.paymentStatus = 'pending';
       }
 

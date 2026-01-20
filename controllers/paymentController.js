@@ -320,17 +320,30 @@ const paymentController = {
       const { order, payment } = data || {};
 
       if (!order || !payment) {
+        console.error('Invalid webhook data:', JSON.stringify(req.body, null, 2));
         return res.status(400).json({ status: 'error', message: 'Invalid webhook data' });
       }
 
-      // Find order by order number
+      // Find order by order number (order.orderId is the Cashfree order ID, which matches our orderNumber)
       const dbOrder = await Order.findOne({ orderNumber: order.orderId });
       if (!dbOrder) {
-        console.error('Order not found:', order.orderId);
-        return res.status(404).json({ status: 'error', message: 'Order not found' });
+        console.error('Order not found for Cashfree order ID:', order.orderId);
+        // Return 200 to prevent Cashfree from retrying
+        return res.status(200).json({ 
+          status: 'error', 
+          message: 'Order not found',
+          note: 'Order may have been deleted or order number mismatch'
+        });
       }
 
-      // Update payment details
+      // Prevent duplicate processing - check if payment already processed
+      if (dbOrder.paymentStatus === 'completed' && payment.paymentStatus === 'SUCCESS') {
+        console.log('Payment already processed for order:', order.orderId);
+        return res.json({ status: 'success', message: 'Payment already processed' });
+      }
+
+      // Update payment details with Cashfree payment information
+      const paymentTime = payment.paymentTime ? new Date(payment.paymentTime) : new Date();
       dbOrder.paymentDetails = {
         ...dbOrder.paymentDetails,
         cashfreePaymentId: payment.paymentId,
@@ -339,7 +352,10 @@ const paymentController = {
         cashfreePaymentStatus: payment.paymentStatus,
         cashfreeAmount: payment.paymentAmount?.value || payment.paymentAmount,
         cashfreeCurrency: payment.paymentAmount?.currency || 'INR',
-        paymentDate: new Date(payment.paymentTime || Date.now())
+        // Store payment date/time for consistency with other payment methods
+        paymentDate: paymentTime.toISOString().split('T')[0], // Format: YYYY-MM-DD
+        paymentTime: paymentTime.toTimeString().split(' ')[0].slice(0, 5), // Format: HH:MM
+        transactionId: payment.txId // Also store in main transactionId field for consistency
       };
 
       // Update order status based on payment status
@@ -442,27 +458,61 @@ const paymentController = {
           );
 
           const orderData = orderResponse.data;
-          if (orderData && orderData.payment_status === 'SUCCESS') {
-            // Update order status
-            order.paymentStatus = 'completed';
-            order.status = 'awaiting_approval';
-            order.paymentDetails = {
-              ...order.paymentDetails,
-              cashfreePaymentStatus: 'SUCCESS',
-              paymentDate: new Date()
-            };
-            await order.save();
-
-            return res.json({
-              status: 'success',
-              data: {
-                order,
-                paymentStatus: 'completed'
+          if (orderData) {
+            if (orderData.payment_status === 'SUCCESS') {
+              // Update order status only if not already completed
+              if (order.paymentStatus !== 'completed') {
+                const paymentTime = new Date();
+                order.paymentStatus = 'completed';
+                order.status = 'awaiting_approval';
+                order.paymentDetails = {
+                  ...order.paymentDetails,
+                  cashfreePaymentStatus: 'SUCCESS',
+                  paymentDate: paymentTime.toISOString().split('T')[0], // Format: YYYY-MM-DD
+                  paymentTime: paymentTime.toTimeString().split(' ')[0].slice(0, 5) // Format: HH:MM
+                };
+                
+                // Clear cart if payment successful
+                const cart = await Cart.findOne({ userId: order.user });
+                if (cart) {
+                  cart.items = [];
+                  await cart.save();
+                }
+                
+                await order.save();
               }
-            });
+
+              return res.json({
+                status: 'success',
+                data: {
+                  order,
+                  paymentStatus: 'completed'
+                }
+              });
+            } else if (orderData.payment_status === 'FAILED') {
+              // Update order status if payment failed
+              if (order.paymentStatus !== 'failed') {
+                order.paymentStatus = 'failed';
+                order.status = 'cancelled';
+                order.paymentDetails = {
+                  ...order.paymentDetails,
+                  cashfreePaymentStatus: 'FAILED'
+                };
+                await order.save();
+              }
+
+              return res.json({
+                status: 'success',
+                data: {
+                  order,
+                  paymentStatus: 'failed'
+                }
+              });
+            }
           }
         } catch (verifyError) {
           console.error('Payment verification error:', verifyError);
+          // Don't fail the request if verification fails - return current status
         }
       }
 

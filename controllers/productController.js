@@ -17,6 +17,7 @@ const productController = {
         category,
         isNewArrival,
         isSale,
+        isStretched,
         search
       } = req.query;
 
@@ -67,6 +68,7 @@ const productController = {
         
         if (isNewArrival !== undefined) filter.isNewArrival = isNewArrival === 'true';
         if (isSale !== undefined) filter.isSale = isSale === 'true';
+        if (isStretched !== undefined) filter.isStretched = isStretched === 'true';
         
         if (minPrice || maxPrice) {
           filter.price = {};
@@ -159,7 +161,8 @@ const productController = {
         size,
         material,
         isNewArrival,
-        isSale
+        isSale,
+        isStretched
       } = req.query;
 
       console.log('getProductsByCategory called with category:', categoryId);
@@ -174,6 +177,7 @@ const productController = {
       if (material) filter.material = { $regex: new RegExp(material, 'i') };
       if (isNewArrival !== undefined) filter.isNewArrival = isNewArrival === 'true';
       if (isSale !== undefined) filter.isSale = isSale === 'true';
+      if (isStretched !== undefined) filter.isStretched = isStretched === 'true';
       
       if (minPrice || maxPrice) {
         filter.price = {};
@@ -445,6 +449,20 @@ const productController = {
         productData.colors = [];
       }
 
+      // Parse materials array if it comes as string
+      if (typeof productData.materials === 'string') {
+        try {
+          productData.materials = JSON.parse(productData.materials);
+        } catch (e) {
+          productData.materials = [];
+        }
+      }
+      
+      // Ensure materials is an array
+      if (!Array.isArray(productData.materials)) {
+        productData.materials = [];
+      }
+
       // Set primary color from first color in array (for backward compatibility)
       if (productData.colors && productData.colors.length > 0) {
         productData.color = productData.colors[0];
@@ -502,22 +520,18 @@ const productController = {
         productData.isSale = productData.isSale === 'true';
       }
 
+      if (typeof productData.isStretched === 'string') {
+        productData.isStretched = productData.isStretched === 'true';
+      }
+
       // Validate comparePrice if provided
       if (productData.comparePrice !== undefined && productData.comparePrice !== null) {
         const comparePrice = Number(productData.comparePrice);
-        const price = Number(productData.price);
         
         if (comparePrice < 0) {
           return res.status(400).json({
             status: 'error',
             message: 'Compare price cannot be negative'
-          });
-        }
-        
-        if (comparePrice <= price) {
-          return res.status(400).json({
-            status: 'error',
-            message: 'Compare price must be greater than normal price'
           });
         }
       }
@@ -673,19 +687,11 @@ const productController = {
       // Validate comparePrice if provided
       if (productData.comparePrice !== undefined && productData.comparePrice !== null) {
         const comparePrice = Number(productData.comparePrice);
-        const price = Number(productData.price || existingProduct.price);
         
         if (comparePrice < 0) {
           return res.status(400).json({
             status: 'error',
             message: 'Compare price cannot be negative'
-          });
-        }
-        
-        if (comparePrice <= price) {
-          return res.status(400).json({
-            status: 'error',
-            message: 'Compare price must be greater than normal price'
           });
         }
       }
@@ -715,6 +721,25 @@ const productController = {
       // Ensure colors is an array
       if (!Array.isArray(productData.colors)) {
         productData.colors = existingProduct?.colors || [];
+      }
+
+      // Parse materials array if it comes as string
+      if (typeof productData.materials === 'string') {
+        try {
+          productData.materials = JSON.parse(productData.materials);
+        } catch (e) {
+          // Keep existing materials if parsing fails
+          if (existingProduct.materials) {
+            productData.materials = existingProduct.materials;
+          } else {
+            productData.materials = [];
+          }
+        }
+      }
+      
+      // Ensure materials is an array
+      if (!Array.isArray(productData.materials)) {
+        productData.materials = existingProduct?.materials || [];
       }
 
       // Set primary color from first color in array (for backward compatibility)
@@ -761,6 +786,10 @@ const productController = {
 
       if (typeof productData.isSale === 'string') {
         productData.isSale = productData.isSale === 'true';
+      }
+
+      if (typeof productData.isStretched === 'string') {
+        productData.isStretched = productData.isStretched === 'true';
       }
 
       // Remove existingImages from update data
@@ -879,7 +908,7 @@ const productController = {
   // Search products (updated to include category)
   async searchProducts(req, res) {
     try {
-      const { q, page = 1, limit = 20, size, material, category, isNewArrival, isSale } = req.query;
+      const { q, page = 1, limit = 20, size, material, category, isNewArrival, isSale, isStretched } = req.query;
 
       if (!q) {
         return res.status(400).json({
@@ -903,6 +932,7 @@ const productController = {
       if (category) filter.category = { $regex: category, $options: 'i' }; // NEW: Category filter
       if (isNewArrival !== undefined) filter.isNewArrival = isNewArrival === 'true';
       if (isSale !== undefined) filter.isSale = isSale === 'true';
+      if (isStretched !== undefined) filter.isStretched = isStretched === 'true';
 
       const skip = (page - 1) * limit;
       const total = await Product.countDocuments(filter);

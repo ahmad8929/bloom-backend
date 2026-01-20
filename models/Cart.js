@@ -24,6 +24,10 @@ const cartItemSchema = new mongoose.Schema({
   color: {
     name: { type: String },
     hexCode: { type: String }
+  },
+  material: {
+    type: String,
+    required: false
   }
 }, { _id: true });
 
@@ -48,20 +52,33 @@ const cartSchema = new mongoose.Schema({
 
 // Calculate totals before saving
 cartSchema.pre('save', async function(next) {
-  if (this.items && this.items.length > 0) {
-    // Populate products to calculate totals
-    await this.populate('items.product');
-    
-    this.totalItems = this.items.reduce((total, item) => total + item.quantity, 0);
-    this.totalAmount = this.items.reduce((total, item) => {
-      const price = item.product ? item.product.price : 0;
-      return total + (price * item.quantity);
-    }, 0);
-  } else {
-    this.totalItems = 0;
-    this.totalAmount = 0;
+  try {
+    if (this.items && this.items.length > 0) {
+      // Filter out any items with null/undefined product references before populating
+      this.items = this.items.filter(item => item.productId && item.product);
+      
+      if (this.items.length > 0) {
+        // Populate products to calculate totals
+        await this.populate('items.product');
+        
+        this.totalItems = this.items.reduce((total, item) => total + (item.quantity || 0), 0);
+        this.totalAmount = this.items.reduce((total, item) => {
+          const price = item.product && item.product.price ? item.product.price : 0;
+          return total + (price * (item.quantity || 0));
+        }, 0);
+      } else {
+        this.totalItems = 0;
+        this.totalAmount = 0;
+      }
+    } else {
+      this.totalItems = 0;
+      this.totalAmount = 0;
+    }
+    next();
+  } catch (error) {
+    console.error('Error in cart pre-save hook:', error);
+    next(error);
   }
-  next();
 });
 
 module.exports = mongoose.model('Cart', cartSchema);
