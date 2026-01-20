@@ -17,8 +17,8 @@ const getCashfreeBaseURL = () => {
 
 // Get Cashfree API headers
 const getCashfreeHeaders = () => {
-  const appId = process.env.CASHFREE_APP_ID
-  const secretKey = process.env.CASHFREE_SECRET_KEY
+  const appId = process.env.CASHFREE_APP_ID;
+  const secretKey = process.env.CASHFREE_SECRET_KEY;
   
   if (!appId || !secretKey) {
     throw new Error('Cashfree credentials not configured. Please set CASHFREE_APP_ID and CASHFREE_SECRET_KEY in your .env file');
@@ -144,14 +144,14 @@ const paymentController = {
       const order = new Order({
         user: req.user.id,
         items: cart.items.map(item => ({
-          product: item.product._id,
-          productId: item.product._id,
-          name: item.product.name,
-          price: item.product.price,
+          product: item.product?._id || item.productId,
+          productId: item.product?._id || item.productId,
+          name: item.product?.name || 'Product',
+          price: item.product?.price || 0,
           quantity: item.quantity,
-          size: item.size || item.product.size,
-          color: item.color || item.product.color || null,
-          image: item.product.images[0]?.url
+          size: item.size || item.product?.size,
+          color: item.color || item.product?.color || null,
+          image: item.product?.images?.[0]?.url
         })),
         shippingAddress,
         paymentMethod: 'cashfree',

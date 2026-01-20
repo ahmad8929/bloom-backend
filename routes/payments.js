@@ -5,6 +5,11 @@ const paymentController = require('../controllers/paymentController');
 
 const router = express.Router();
 
+// Test route to verify payments router is working
+router.get('/test', (req, res) => {
+  res.json({ status: 'success', message: 'Payments router is working' });
+});
+
 // Create payment session (requires authentication)
 router.post('/cashfree/create-session', auth, paymentController.createPaymentSession);
 
