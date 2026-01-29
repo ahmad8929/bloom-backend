@@ -5,19 +5,12 @@ const paymentController = require('../controllers/paymentController');
 
 const router = express.Router();
 
-// Test route to verify payments router is working
-router.get('/test', (req, res) => {
-  res.json({ status: 'success', message: 'Payments router is working' });
-});
-
-// Create payment session (requires authentication)
+// Create payment
 router.post('/cashfree/create-session', auth, paymentController.createPaymentSession);
 
-// Verify payment status (requires authentication)
-router.get('/cashfree/verify/:orderId', auth, paymentController.verifyPayment);
+// Refund
+router.post('/cashfree/refund/:orderId', auth, paymentController.refundPayment);
 
-// Webhook endpoint (no authentication - Cashfree will call this)
-router.post('/cashfree/webhook', paymentController.handleWebhook);
+// ❌ Webhook NOT here (handled in server.js with RAW body)
 
 module.exports = router;
-
