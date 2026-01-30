@@ -158,5 +158,133 @@ module.exports = {
       console.error(err);
       res.status(500).json({ message: 'Refund failed' });
     }
+  },
+
+  // Verify payment by order number (used after Cashfree redirect)
+async verifyPaymentByOrderNumber(req, res) {
+  try {
+    const { orderNumber } = req.params;
+
+    if (!orderNumber) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Order number is required'
+      });
+    }
+
+    const order = await Order.findOne({ orderNumber });
+
+    if (!order) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Order not found'
+      });
+    }
+
+    /**
+     * IMPORTANT LOGIC:
+     * - If webhook already marked completed → return immediately
+     * - Else fallback to Cashfree verification API
+     */
+
+    if (order.paymentStatus === 'completed') {
+      return res.json({
+        status: 'success',
+        data: {
+          order,
+          paymentStatus: 'completed'
+        }
+      });
+    }
+
+    if (order.paymentStatus === 'failed') {
+      return res.json({
+        status: 'success',
+        data: {
+          order,
+          paymentStatus: 'failed'
+        }
+      });
+    }
+
+    // If still pending → ask Cashfree directly
+    if (order.paymentDetails?.cashfreeOrderId) {
+      try {
+        const baseURL = getCashfreeBaseURL();
+        const headers = getCashfreeHeaders();
+
+        const cfRes = await axios.get(
+          `${baseURL}/pg/orders/${order.paymentDetails.cashfreeOrderId}`,
+          { headers }
+        );
+
+        const cfOrder = cfRes.data;
+
+        if (cfOrder?.payment_status === 'SUCCESS') {
+          order.paymentStatus = 'completed';
+          order.status = 'awaiting_approval';
+
+          order.timeline.push({
+            status: 'awaiting_approval',
+            note: 'Payment confirmed via Cashfree verify API',
+            timestamp: new Date(),
+            updatedBy: order.user
+          });
+
+          await order.save();
+
+          return res.json({
+            status: 'success',
+            data: {
+              order,
+              paymentStatus: 'completed'
+            }
+          });
+        }
+
+        if (cfOrder?.payment_status === 'FAILED') {
+          order.paymentStatus = 'failed';
+          order.status = 'cancelled';
+
+          order.timeline.push({
+            status: 'cancelled',
+            note: 'Payment failed via Cashfree verify API',
+            timestamp: new Date(),
+            updatedBy: order.user
+          });
+
+          await order.save();
+
+          return res.json({
+            status: 'success',
+            data: {
+              order,
+              paymentStatus: 'failed'
+            }
+          });
+        }
+      } catch (cfError) {
+        console.error('Cashfree verify API error:', cfError.message);
+        // DO NOT FAIL — webhook may still arrive
+      }
+    }
+
+    // Default: still pending
+    return res.json({
+      status: 'success',
+      data: {
+        order,
+        paymentStatus: 'pending'
+      }
+    });
+
+  } catch (error) {
+    console.error('verifyPaymentByOrderNumber error:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Failed to verify payment'
+    });
   }
+}
+
 };

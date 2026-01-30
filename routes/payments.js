@@ -11,6 +11,12 @@ router.post('/cashfree/create-session', auth, paymentController.createPaymentSes
 // Refund
 router.post('/cashfree/refund/:orderId', auth, paymentController.refundPayment);
 
-// ❌ Webhook NOT here (handled in server.js with RAW body)
+// Verify payment by Cashfree order number (used after redirect)
+router.get(
+  '/cashfree/verify-by-number/:orderNumber',
+  auth,
+  paymentController.verifyPaymentByOrderNumber
+);
+
 
 module.exports = router;
