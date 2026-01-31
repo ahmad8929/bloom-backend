@@ -139,7 +139,6 @@ const orderController = {
       const order = new Order({
         user: req.user.id,
         items: cart.items.map(item => ({
-          product: item.product._id,
           productId: item.product._id,
           name: item.product.name,
           price: item.product.price,
