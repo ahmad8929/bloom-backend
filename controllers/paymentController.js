@@ -32,147 +32,192 @@ module.exports = {
   // ======================
   // CREATE PAYMENT SESSION
   // ======================
-  async createPaymentSession(req, res) {
-    console.log('🟡 [Cashfree] Create session called');
+// ======================
+// CREATE PAYMENT SESSION
+// ======================
+async createPaymentSession(req, res) {
+  console.log('🟡 [Cashfree] Create session called');
 
-    // 🔍 ENV DEBUG (visible in Render logs)
-    console.log('🧪 Cashfree ENV CHECK', {
-      env: CASHFREE_ENV,
-      hasAppId: !!process.env.CASHFREE_APP_ID,
-      hasSecret: !!process.env.CASHFREE_SECRET_KEY,
-      frontendURL: process.env.FRONTEND_URL
-    });
+  // 🔍 ENV DEBUG (visible in Render logs)
+  console.log('🧪 Cashfree ENV CHECK', {
+    env: CASHFREE_ENV,
+    hasAppId: !!process.env.CASHFREE_APP_ID,
+    hasSecret: !!process.env.CASHFREE_SECRET_KEY,
+    frontendURL: process.env.FRONTEND_URL
+  });
 
-    try {
-      // ❌ ENV VALIDATION
-      const envError = validateCashfreeEnv();
-      if (envError) {
-        console.error('❌ Cashfree ENV error:', envError);
-        return res.status(500).json({
-          message: 'Payment config error',
-          error: envError
-        });
-      }
-
-      // 🛒 CART
-      const cart = await Cart.findOne({ userId: req.user.id }).populate(
-        'items.product'
-      );
-
-      if (!cart || cart.items.length === 0) {
-        console.warn('⚠️ Cart empty for user:', req.user.id);
-        return res.status(400).json({ message: 'Cart empty' });
-      }
-
-      // 💰 AMOUNT (Cashfree requires >= 1)
-      const totalAmount = Math.max(1, Number(cart.totalAmount || 0));
-
-      if (Number.isNaN(totalAmount)) {
-        console.error('❌ Invalid cart total:', cart.totalAmount);
-        return res.status(400).json({
-          message: 'Invalid cart total'
-        });
-      }
-
-      // 📦 ORDER NUMBER (MANDATORY)
-      const orderNumber = `BT-${Date.now()}-${Math.floor(
-        Math.random() * 1000
-      )}`;
-
-      // 👤 CUSTOMER DETAILS
-      const customerEmail = req.user.email;
-      const customerPhone =
-        req.user.phone && /^[0-9]{10}$/.test(req.user.phone)
-          ? req.user.phone
-          : '9999999999'; // fallback (Cashfree is strict)
-
-      if (!customerEmail) {
-        console.error('❌ User email missing:', req.user.id);
-        return res.status(400).json({
-          message: 'User email missing'
-        });
-      }
-
-      // 🧾 CREATE ORDER IN DB
-      const order = await Order.create({
-        orderNumber,
-        user: req.user.id,
-        items: cart.items,
-        totalAmount,
-        paymentMethod: 'cashfree',
-        paymentStatus: 'pending',
-        status: 'pending'
-      });
-
-      console.log('✅ Order created', {
-        orderNumber,
-        amount: totalAmount,
-        user: req.user.id
-      });
-
-      // 💳 CASHFREE API CALL
-      let cfResponse;
-      try {
-        cfResponse = await axios.post(
-          `${CASHFREE_BASE}/pg/orders`,
-          {
-            order_id: orderNumber,
-            order_amount: totalAmount,
-            order_currency: 'INR',
-            customer_details: {
-              customer_id: req.user.id.toString(),
-              customer_email: customerEmail,
-              customer_phone: customerPhone
-            },
-            order_meta: {
-              return_url: `${process.env.FRONTEND_URL}/checkout/payment-success?order_id=${orderNumber}`
-            }
-          },
-          { headers: CASHFREE_HEADERS }
-        );
-      } catch (cfError) {
-        console.error('❌ Cashfree API FAILED', {
-          status: cfError.response?.status,
-          data: cfError.response?.data,
-          message: cfError.message
-        });
-
-        return res.status(500).json({
-          message: 'Cashfree order creation failed',
-          error: cfError.response?.data || cfError.message
-        });
-      }
-
-      // 💾 SAVE PAYMENT DETAILS
-      order.paymentDetails = {
-        cashfreeOrderId: cfResponse.data.order_id,
-        cashfreeSessionId: cfResponse.data.payment_session_id
-      };
-
-      await order.save();
-
-      console.log('✅ Cashfree session created', {
-        orderNumber,
-        cashfreeOrderId: cfResponse.data.order_id
-      });
-
-      // ✅ FINAL RESPONSE
-      return res.json({
-        status: 'success',
-        data: {
-          paymentSessionId: cfResponse.data.payment_session_id,
-          orderNumber,
-          amount: totalAmount
-        }
-      });
-    } catch (err) {
-      console.error('🔥 createPaymentSession crash', err);
+  try {
+    // ❌ ENV VALIDATION
+    const envError = validateCashfreeEnv();
+    if (envError) {
+      console.error('❌ Cashfree ENV error:', envError);
       return res.status(500).json({
-        message: 'Payment session failed',
-        error: err.message
+        message: 'Payment config error',
+        error: envError
       });
     }
-  },
+
+    // 🛒 CART
+    const cart = await Cart.findOne({ userId: req.user.id }).populate(
+      'items.product'
+    );
+
+    if (!cart || cart.items.length === 0) {
+      console.warn('⚠️ Cart empty for user:', req.user.id);
+      return res.status(400).json({ message: 'Cart empty' });
+    }
+
+    // 📦 ORDER NUMBER
+    const orderNumber = `BT-${Date.now()}-${Math.floor(
+      Math.random() * 1000
+    )}`;
+
+    // 📍 SHIPPING ADDRESS (REQUIRED BY SCHEMA)
+    const { shippingAddress } = req.body;
+
+    if (!shippingAddress) {
+      console.error('❌ Shipping address missing');
+      return res.status(400).json({
+        message: 'Shipping address missing'
+      });
+    }
+
+    // 🧾 BUILD ORDER ITEMS (price REQUIRED)
+    const orderItems = cart.items.map(item => {
+      if (!item.product || typeof item.product.price !== 'number') {
+        throw new Error(`Invalid product price for item ${item._id}`);
+      }
+
+      return {
+        product: item.product._id,
+        quantity: item.quantity,
+        size: item.size,
+        price: item.product.price // 🔴 REQUIRED by schema
+      };
+    });
+
+    // 💰 SUBTOTAL (REQUIRED BY SCHEMA)
+    const subtotal = orderItems.reduce(
+      (sum, item) => sum + item.price * item.quantity,
+      0
+    );
+
+    if (!subtotal || subtotal < 1) {
+      console.error('❌ Invalid subtotal:', subtotal);
+      return res.status(400).json({
+        message: 'Invalid order subtotal'
+      });
+    }
+
+    // 👤 CUSTOMER DETAILS (Cashfree strict)
+    const customerEmail = shippingAddress.email || req.user.email;
+    const customerPhone =
+      shippingAddress.phone && /^[0-9]{10}$/.test(shippingAddress.phone)
+        ? shippingAddress.phone
+        : '9999999999';
+
+    if (!customerEmail) {
+      console.error('❌ Customer email missing');
+      return res.status(400).json({
+        message: 'Customer email missing'
+      });
+    }
+
+    // 🧾 CREATE ORDER (SCHEMA-SAFE)
+    const order = await Order.create({
+      orderNumber,
+      user: req.user.id,
+
+      items: orderItems,
+      subtotal,
+      totalAmount: subtotal,
+
+      shippingAddress: {
+        fullName: shippingAddress.fullName,
+        email: customerEmail,
+        phone: customerPhone,
+        address: shippingAddress.address,
+        city: shippingAddress.city,
+        state: shippingAddress.state,
+        pincode: shippingAddress.pincode,
+        nearbyPlaces: shippingAddress.nearbyPlaces || ''
+      },
+
+      paymentMethod: 'cashfree',
+      paymentStatus: 'pending',
+      status: 'pending'
+    });
+
+    console.log('✅ Order created', {
+      orderNumber,
+      subtotal,
+      user: req.user.id
+    });
+
+    // 💳 CASHFREE API CALL
+    let cfResponse;
+    try {
+      cfResponse = await axios.post(
+        `${CASHFREE_BASE}/pg/orders`,
+        {
+          order_id: orderNumber,
+          order_amount: subtotal,
+          order_currency: 'INR',
+          customer_details: {
+            customer_id: req.user.id.toString(),
+            customer_email: customerEmail,
+            customer_phone: customerPhone
+          },
+          order_meta: {
+            return_url: `${process.env.FRONTEND_URL}/checkout/payment-success?order_id=${orderNumber}`
+          }
+        },
+        { headers: CASHFREE_HEADERS }
+      );
+    } catch (cfError) {
+      console.error('❌ Cashfree API FAILED', {
+        status: cfError.response?.status,
+        data: cfError.response?.data,
+        message: cfError.message
+      });
+
+      return res.status(500).json({
+        message: 'Cashfree order creation failed',
+        error: cfError.response?.data || cfError.message
+      });
+    }
+
+    // 💾 SAVE CASHFREE DETAILS
+    order.paymentDetails = {
+      cashfreeOrderId: cfResponse.data.order_id,
+      cashfreeSessionId: cfResponse.data.payment_session_id
+    };
+
+    await order.save();
+
+    console.log('✅ Cashfree session created', {
+      orderNumber,
+      cashfreeOrderId: cfResponse.data.order_id
+    });
+
+    // ✅ FINAL RESPONSE
+    return res.json({
+      status: 'success',
+      data: {
+        paymentSessionId: cfResponse.data.payment_session_id,
+        orderNumber,
+        amount: subtotal
+      }
+    });
+  } catch (err) {
+    console.error('🔥 createPaymentSession crash', err);
+    return res.status(500).json({
+      message: 'Payment session failed',
+      error: err.message
+    });
+  }
+},
+
 
   // ======================
   // CASHFREE WEBHOOK
