@@ -89,7 +89,7 @@ async createPaymentSession(req, res) {
       }
 
       return {
-        productId: item.product._id,
+        product: item.product._id,
         quantity: item.quantity,
         size: item.size,
         price: item.product.price // 🔴 REQUIRED by schema
