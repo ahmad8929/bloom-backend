@@ -3,10 +3,11 @@ const axios = require('axios');
 const crypto = require('crypto');
 const Order = require('../models/Order');
 const Cart = require('../models/Cart');
-const Coupon = require('../models/Coupon');
+
+const CASHFREE_ENV = process.env.CASHFREE_ENVIRONMENT || 'SANDBOX';
 
 const CASHFREE_BASE =
-  process.env.CASHFREE_ENVIRONMENT === 'PRODUCTION'
+  CASHFREE_ENV === 'PRODUCTION'
     ? 'https://api.cashfree.com'
     : 'https://sandbox.cashfree.com';
 
@@ -17,20 +18,84 @@ const CASHFREE_HEADERS = {
   'Content-Type': 'application/json'
 };
 
+/**
+ * Helper: validate env vars early
+ */
+function validateCashfreeEnv() {
+  if (!process.env.CASHFREE_APP_ID) return 'CASHFREE_APP_ID missing';
+  if (!process.env.CASHFREE_SECRET_KEY) return 'CASHFREE_SECRET_KEY missing';
+  if (!process.env.CASHFREE_ENVIRONMENT) return 'CASHFREE_ENVIRONMENT missing';
+  return null;
+}
+
 module.exports = {
   // ======================
   // CREATE PAYMENT SESSION
   // ======================
   async createPaymentSession(req, res) {
+    console.log('🟡 [Cashfree] Create session called');
+
+    // 🔍 ENV DEBUG (visible in Render logs)
+    console.log('🧪 Cashfree ENV CHECK', {
+      env: CASHFREE_ENV,
+      hasAppId: !!process.env.CASHFREE_APP_ID,
+      hasSecret: !!process.env.CASHFREE_SECRET_KEY,
+      frontendURL: process.env.FRONTEND_URL
+    });
+
     try {
-      const cart = await Cart.findOne({ userId: req.user.id }).populate('items.product');
+      // ❌ ENV VALIDATION
+      const envError = validateCashfreeEnv();
+      if (envError) {
+        console.error('❌ Cashfree ENV error:', envError);
+        return res.status(500).json({
+          message: 'Payment config error',
+          error: envError
+        });
+      }
+
+      // 🛒 CART
+      const cart = await Cart.findOne({ userId: req.user.id }).populate(
+        'items.product'
+      );
+
       if (!cart || cart.items.length === 0) {
+        console.warn('⚠️ Cart empty for user:', req.user.id);
         return res.status(400).json({ message: 'Cart empty' });
       }
 
-      const totalAmount = Math.max(1, cart.totalAmount);
+      // 💰 AMOUNT (Cashfree requires >= 1)
+      const totalAmount = Math.max(1, Number(cart.totalAmount || 0));
 
+      if (Number.isNaN(totalAmount)) {
+        console.error('❌ Invalid cart total:', cart.totalAmount);
+        return res.status(400).json({
+          message: 'Invalid cart total'
+        });
+      }
+
+      // 📦 ORDER NUMBER (MANDATORY)
+      const orderNumber = `BT-${Date.now()}-${Math.floor(
+        Math.random() * 1000
+      )}`;
+
+      // 👤 CUSTOMER DETAILS
+      const customerEmail = req.user.email;
+      const customerPhone =
+        req.user.phone && /^[0-9]{10}$/.test(req.user.phone)
+          ? req.user.phone
+          : '9999999999'; // fallback (Cashfree is strict)
+
+      if (!customerEmail) {
+        console.error('❌ User email missing:', req.user.id);
+        return res.status(400).json({
+          message: 'User email missing'
+        });
+      }
+
+      // 🧾 CREATE ORDER IN DB
       const order = await Order.create({
+        orderNumber,
         user: req.user.id,
         items: cart.items,
         totalAmount,
@@ -39,37 +104,73 @@ module.exports = {
         status: 'pending'
       });
 
-      const response = await axios.post(
-        `${CASHFREE_BASE}/pg/orders`,
-        {
-          order_id: order.orderNumber,
-          order_amount: totalAmount,
-          order_currency: 'INR',
-          customer_details: {
-            customer_id: req.user.id.toString(),
-            customer_email: req.user.email,
-            customer_phone: req.user.phone
-          },
-          order_meta: {
-            return_url: `${process.env.FRONTEND_URL}/checkout/payment-status?order=${order.orderNumber}`
-          }
-        },
-        { headers: CASHFREE_HEADERS }
-      );
+      console.log('✅ Order created', {
+        orderNumber,
+        amount: totalAmount,
+        user: req.user.id
+      });
 
+      // 💳 CASHFREE API CALL
+      let cfResponse;
+      try {
+        cfResponse = await axios.post(
+          `${CASHFREE_BASE}/pg/orders`,
+          {
+            order_id: orderNumber,
+            order_amount: totalAmount,
+            order_currency: 'INR',
+            customer_details: {
+              customer_id: req.user.id.toString(),
+              customer_email: customerEmail,
+              customer_phone: customerPhone
+            },
+            order_meta: {
+              return_url: `${process.env.FRONTEND_URL}/checkout/payment-success?order_id=${orderNumber}`
+            }
+          },
+          { headers: CASHFREE_HEADERS }
+        );
+      } catch (cfError) {
+        console.error('❌ Cashfree API FAILED', {
+          status: cfError.response?.status,
+          data: cfError.response?.data,
+          message: cfError.message
+        });
+
+        return res.status(500).json({
+          message: 'Cashfree order creation failed',
+          error: cfError.response?.data || cfError.message
+        });
+      }
+
+      // 💾 SAVE PAYMENT DETAILS
       order.paymentDetails = {
-        cashfreeOrderId: response.data.order_id,
-        cashfreeSessionId: response.data.payment_session_id
+        cashfreeOrderId: cfResponse.data.order_id,
+        cashfreeSessionId: cfResponse.data.payment_session_id
       };
+
       await order.save();
 
-      res.json({
-        paymentSessionId: response.data.payment_session_id,
-        orderNumber: order.orderNumber
+      console.log('✅ Cashfree session created', {
+        orderNumber,
+        cashfreeOrderId: cfResponse.data.order_id
+      });
+
+      // ✅ FINAL RESPONSE
+      return res.json({
+        status: 'success',
+        data: {
+          paymentSessionId: cfResponse.data.payment_session_id,
+          orderNumber,
+          amount: totalAmount
+        }
       });
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ message: 'Payment session failed' });
+      console.error('🔥 createPaymentSession crash', err);
+      return res.status(500).json({
+        message: 'Payment session failed',
+        error: err.message
+      });
     }
   },
 
@@ -77,10 +178,17 @@ module.exports = {
   // CASHFREE WEBHOOK
   // ======================
   async handleWebhook(req, res) {
+    console.log('🔔 Cashfree webhook received');
+
     try {
       const signature = req.headers['x-webhook-signature'];
       const timestamp = req.headers['x-webhook-timestamp'];
       const secret = process.env.CASHFREE_WEBHOOK_SECRET;
+
+      if (!signature || !timestamp || !secret) {
+        console.error('❌ Webhook header/secret missing');
+        return res.status(400).send('Invalid webhook');
+      }
 
       const rawBody = req.body.toString();
       const signedPayload = `${timestamp}.${rawBody}`;
@@ -91,29 +199,45 @@ module.exports = {
         .digest('base64');
 
       if (signature !== expectedSignature) {
+        console.error('❌ Webhook signature mismatch');
         return res.status(401).send('Invalid signature');
       }
 
       const payload = JSON.parse(rawBody);
       const { order, payment } = payload.data;
 
+      console.log('📦 Webhook payload', {
+        orderId: order.order_id,
+        status: payment.payment_status
+      });
+
       const dbOrder = await Order.findOne({
         'paymentDetails.cashfreeOrderId': order.order_id
       });
 
-      if (!dbOrder) return res.status(200).send('Order not found');
+      if (!dbOrder) {
+        console.warn('⚠️ Order not found for webhook');
+        return res.status(200).send('Order not found');
+      }
 
-      // 🔁 Idempotency
-      if (dbOrder.paymentDetails?.cashfreePaymentId === payment.cf_payment_id) {
+      // 🔁 IDEMPOTENCY
+      if (
+        dbOrder.paymentDetails?.cashfreePaymentId === payment.cf_payment_id
+      ) {
+        console.log('🔁 Webhook already processed');
         return res.status(200).send('Already processed');
       }
 
       if (payment.payment_status === 'SUCCESS') {
         dbOrder.paymentStatus = 'completed';
         dbOrder.status = 'awaiting_approval';
-        dbOrder.paymentDetails.cashfreePaymentId = payment.cf_payment_id;
+        dbOrder.paymentDetails.cashfreePaymentId =
+          payment.cf_payment_id;
 
-        await Cart.updateOne({ userId: dbOrder.user }, { items: [] });
+        await Cart.updateOne(
+          { userId: dbOrder.user },
+          { items: [] }
+        );
       }
 
       if (payment.payment_status === 'FAILED') {
@@ -122,13 +246,15 @@ module.exports = {
       }
 
       await dbOrder.save();
+      console.log('✅ Webhook processed successfully');
+
       res.status(200).json({ received: true });
     } catch (err) {
-      console.error(err);
+      console.error('🔥 Webhook crash', err);
       res.status(500).send('Webhook error');
     }
   },
-
+  
   // ======================
   // REFUND
   // ======================
@@ -286,5 +412,4 @@ async verifyPaymentByOrderNumber(req, res) {
     });
   }
 }
-
 };
