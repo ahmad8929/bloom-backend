@@ -6,10 +6,7 @@ const Cart = require('../models/Cart');
 
 const CASHFREE_ENV = process.env.CASHFREE_ENVIRONMENT || 'SANDBOX';
 
-const CASHFREE_BASE =
-  CASHFREE_ENV === 'PRODUCTION'
-    ? 'https://api.cashfree.com'
-    : 'https://sandbox.cashfree.com';
+const CASHFREE_BASE = 'https://api.cashfree.com';
 
 const CASHFREE_HEADERS = {
   'x-client-id': process.env.CASHFREE_APP_ID,
@@ -32,9 +29,6 @@ module.exports = {
   // ======================
   // CREATE PAYMENT SESSION
   // ======================
-// ======================
-// CREATE PAYMENT SESSION
-// ======================
 async createPaymentSession(req, res) {
   console.log('🟡 [Cashfree] Create session called');
 
@@ -331,8 +325,11 @@ async createPaymentSession(req, res) {
     }
   },
 
-  // Verify payment by order number (used after Cashfree redirect)
-async verifyPaymentByOrderNumber(req, res) {
+  // ======================
+// VERIFY PAYMENT BY ORDER NUMBER
+// ======================
+
+async  verifyPaymentByOrderNumber(req, res) {
   try {
     const { orderNumber } = req.params;
 
@@ -343,6 +340,7 @@ async verifyPaymentByOrderNumber(req, res) {
       });
     }
 
+    // 1️⃣ Fetch order from DB
     const order = await Order.findOne({ orderNumber });
 
     if (!order) {
@@ -353,11 +351,8 @@ async verifyPaymentByOrderNumber(req, res) {
     }
 
     /**
-     * IMPORTANT LOGIC:
-     * - If webhook already marked completed → return immediately
-     * - Else fallback to Cashfree verification API
+     * 2️⃣ WEBHOOK WINS (source of truth)
      */
-
     if (order.paymentStatus === 'completed') {
       return res.json({
         status: 'success',
@@ -378,69 +373,92 @@ async verifyPaymentByOrderNumber(req, res) {
       });
     }
 
-    // If still pending → ask Cashfree directly
-    if (order.paymentDetails?.cashfreeOrderId) {
-      try {
-        const baseURL = getCashfreeBaseURL();
-        const headers = getCashfreeHeaders();
-
-        const cfRes = await axios.get(
-          `${baseURL}/pg/orders/${order.paymentDetails.cashfreeOrderId}`,
-          { headers }
-        );
-
-        const cfOrder = cfRes.data;
-
-        if (cfOrder?.payment_status === 'SUCCESS') {
-          order.paymentStatus = 'completed';
-          order.status = 'awaiting_approval';
-
-          order.timeline.push({
-            status: 'awaiting_approval',
-            note: 'Payment confirmed via Cashfree verify API',
-            timestamp: new Date(),
-            updatedBy: order.user
-          });
-
-          await order.save();
-
-          return res.json({
-            status: 'success',
-            data: {
-              order,
-              paymentStatus: 'completed'
-            }
-          });
+    /**
+     * 3️⃣ FALLBACK → VERIFY WITH CASHFREE
+     * (only if still pending)
+     */
+    if (!order.paymentDetails?.cashfreeOrderId) {
+      return res.json({
+        status: 'success',
+        data: {
+          order,
+          paymentStatus: 'pending'
         }
-
-        if (cfOrder?.payment_status === 'FAILED') {
-          order.paymentStatus = 'failed';
-          order.status = 'cancelled';
-
-          order.timeline.push({
-            status: 'cancelled',
-            note: 'Payment failed via Cashfree verify API',
-            timestamp: new Date(),
-            updatedBy: order.user
-          });
-
-          await order.save();
-
-          return res.json({
-            status: 'success',
-            data: {
-              order,
-              paymentStatus: 'failed'
-            }
-          });
-        }
-      } catch (cfError) {
-        console.error('Cashfree verify API error:', cfError.message);
-        // DO NOT FAIL — webhook may still arrive
-      }
+      });
     }
 
-    // Default: still pending
+    try {
+      const cfRes = await axios.get(
+        `${CASHFREE_BASE}/pg/orders/${order.paymentDetails.cashfreeOrderId}`,
+        { headers: CASHFREE_HEADERS }
+      );
+
+      const cfStatus = cfRes.data?.payment_status;
+
+
+      // ✅ SUCCESS
+      if (cfStatus === 'SUCCESS') {
+        order.paymentStatus = 'completed';
+        order.status = 'awaiting_approval';
+
+        order.timeline.push({
+          status: 'awaiting_approval',
+          note: 'Payment verified via Cashfree API',
+          timestamp: new Date(),
+          updatedBy: order.user
+        });
+
+        await order.save();
+
+        // Clear cart (safe even if already empty)
+        await Cart.updateOne(
+          { userId: order.user },
+          { items: [] }
+        );
+
+        return res.json({
+          status: 'success',
+          data: {
+            order,
+            paymentStatus: 'completed'
+          }
+        });
+      }
+
+      // ❌ FAILED
+      if (cfStatus === 'FAILED' || cfStatus === 'CANCELLED') {
+        order.paymentStatus = 'failed';
+        order.status = 'cancelled';
+
+        order.timeline.push({
+          status: 'cancelled',
+          note: 'Payment failed via Cashfree API',
+          timestamp: new Date(),
+          updatedBy: order.user
+        });
+
+        await order.save();
+
+        return res.json({
+          status: 'success',
+          data: {
+            order,
+            paymentStatus: 'failed'
+          }
+        });
+      }
+
+    } catch (cfError) {
+      // DO NOT FAIL — webhook may still arrive
+      console.warn(
+        '⚠️ Cashfree verify API error:',
+        cfError.response?.data || cfError.message
+      );
+    }
+
+    /**
+     * 4️⃣ STILL PENDING
+     */
     return res.json({
       status: 'success',
       data: {
@@ -450,10 +468,10 @@ async verifyPaymentByOrderNumber(req, res) {
     });
 
   } catch (error) {
-    console.error('verifyPaymentByOrderNumber error:', error);
+    console.error('🔥 verifyPaymentByOrderNumber crash:', error);
     return res.status(500).json({
       status: 'error',
-      message: 'Failed to verify payment'
+      message: 'Payment verification failed'
     });
   }
 }

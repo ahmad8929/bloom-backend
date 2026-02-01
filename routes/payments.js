@@ -14,7 +14,6 @@ router.post('/cashfree/refund/:orderId', auth, paymentController.refundPayment);
 // Verify payment by Cashfree order number (used after redirect)
 router.get(
   '/cashfree/verify-by-number/:orderNumber',
-  auth,
   paymentController.verifyPaymentByOrderNumber
 );
 
