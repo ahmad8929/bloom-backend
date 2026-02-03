@@ -5,17 +5,17 @@ const paymentController = require('../controllers/paymentController');
 
 const router = express.Router();
 
-// Create payment
+// Create payment session (requires authentication)
 router.post('/cashfree/create-session', auth, paymentController.createPaymentSession);
 
-// Refund
-router.post('/cashfree/refund/:orderId', auth, paymentController.refundPayment);
+// Verify payment status (requires authentication)
+router.get('/cashfree/verify/:orderId', auth, paymentController.verifyPayment);
 
-// Verify payment by Cashfree order number (used after redirect)
-router.get(
-  '/cashfree/verify-by-number/:orderNumber',
-  paymentController.verifyPaymentByOrderNumber
-);
+// Verify payment status by order number (no auth required - called from payment success page)
+router.get('/cashfree/verify-by-number/:orderNumber', paymentController.verifyPaymentByOrderNumber);
 
+// Webhook endpoint (no authentication - Cashfree will call this)
+router.post('/cashfree/webhook', paymentController.handleWebhook);
 
 module.exports = router;
+

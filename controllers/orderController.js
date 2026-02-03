@@ -118,19 +118,22 @@ const orderController = {
         });
       }
 
+      // Only COD orders can be created directly from this endpoint.
+      // Online payments are handled via Cashfree session creation.
+      if (paymentMethod !== 'cod') {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Invalid payment method. Please select Cashfree for online payments or COD for cash on delivery.'
+        });
+      }
+
       // Calculate shipping and advance payment based on payment method
       let shipping = 0;
       let advancePayment = 0;
 
-      if (paymentMethod === 'cod') {
-        // COD: ₹199 shipping + ₹300 advance payment (advance payment NOT included in total)
-        shipping = 199;
-        advancePayment = 300;
-      } else {
-        // Online payment (upi, card): Free shipping
-        shipping = 0;
-        advancePayment = 0;
-      }
+      // COD: shipping charge (no advance payment)
+      shipping = 199;
+      advancePayment = 0;
 
       // Calculate final total (advance payment is NOT included - it's paid separately)
       const totalAmount = subtotalAfterDiscount + shipping;
@@ -168,32 +171,8 @@ const orderController = {
         }]
       });
 
-      // Handle payment details based on payment method
-      if (paymentMethod === 'upi' && paymentDetails) {
-        order.paymentDetails = {
-          payerName: paymentDetails.payerName,
-          transactionId: paymentDetails.transactionId,
-          paymentDate: paymentDetails.paymentDate,
-          paymentTime: paymentDetails.paymentTime,
-          amount: paymentDetails.amount
-        };
-        order.paymentStatus = 'completed';
-      } else if (paymentMethod === 'card' && paymentDetails) {
-        // Card payment with manual proof upload
-        order.paymentDetails = {
-          payerName: paymentDetails.payerName,
-          transactionId: paymentDetails.transactionId,
-          paymentDate: paymentDetails.paymentDate,
-          paymentTime: paymentDetails.paymentTime,
-          amount: paymentDetails.amount
-        };
-        order.paymentStatus = 'completed';
-      } else if (paymentMethod === 'cod') {
-        order.paymentStatus = 'pending';
-      } else {
-        // Default for other payment methods (should not reach here for cashfree)
-        order.paymentStatus = 'pending';
-      }
+      // COD payments are collected on delivery (advance paid separately, if applicable)
+      order.paymentStatus = 'pending';
 
       // Save order
       await order.save();
@@ -378,187 +357,7 @@ const orderController = {
     }
   },
 
-  // Upload payment proof
-  async uploadPaymentProof(req, res) {
-    try {
-      const order = await Order.findById(req.params.id);
-
-      if (!order) {
-        return res.status(404).json({
-          status: 'error',
-          message: 'Order not found'
-        });
-      }
-
-      // Check if user owns the order
-      // Handle both ObjectId and populated user object
-      const orderUserId = order.user?._id || order.user; // Handle populated or ObjectId
-      const requestUserId = req.user.id;
-      
-      // Debug logging
-      console.log('Payment proof upload check:', {
-        orderId: req.params.id,
-        orderUserId: orderUserId?.toString(),
-        requestUserId: requestUserId?.toString(),
-        orderUserType: orderUserId?.constructor?.name,
-        reqUserType: requestUserId?.constructor?.name,
-        orderUserIsObject: typeof order.user === 'object' && order.user !== null && !order.user.equals,
-        orderUserHasId: !!(order.user?._id)
-      });
-
-      // Check if user owns the order - handle both ObjectId and string comparisons
-      if (!orderUserId || !requestUserId) {
-        console.error('Missing user IDs:', { orderUserId, requestUserId, orderUser: order.user });
-        return res.status(403).json({
-          status: 'error',
-          message: 'Access denied. Invalid user or order data.',
-          debug: process.env.NODE_ENV === 'development' ? {
-            hasOrderUser: !!orderUserId,
-            hasReqUser: !!requestUserId,
-            orderUser: order.user
-          } : undefined
-        });
-      }
-
-      // Compare using Mongoose equals if available, otherwise convert to strings
-      // Handle both ObjectId instances and string comparisons
-      let isOwner = false;
-      if (orderUserId.equals && typeof orderUserId.equals === 'function') {
-        // Both are ObjectIds, use equals method
-        isOwner = orderUserId.equals(requestUserId);
-      } else {
-        // Convert both to strings for comparison
-        isOwner = orderUserId.toString() === requestUserId.toString();
-      }
-
-      console.log('Ownership check result:', { isOwner, orderUserId: orderUserId.toString(), requestUserId: requestUserId.toString() });
-
-      if (!isOwner) {
-        return res.status(403).json({
-          status: 'error',
-          message: 'Access denied. You can only upload payment proof for your own orders.',
-          debug: process.env.NODE_ENV === 'development' ? {
-            orderUserId: orderUserId.toString(),
-            requestUserId: requestUserId.toString(),
-            orderUser: order.user,
-            reqUserId: req.user.id
-          } : undefined
-        });
-      }
-
-      if (!req.file) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Payment proof image is required'
-        });
-      }
-
-      try {
-        // Upload to Cloudinary
-        const result = await uploadToCloudinary(req.file.buffer, 'payment-proofs');
-
-        // Update order with payment proof
-        order.paymentDetails = order.paymentDetails || {};
-        order.paymentDetails.paymentProof = {
-          url: result.secure_url,
-          publicId: result.public_id,
-          uploadedAt: new Date()
-        };
-
-        // Add timeline entry
-        order.timeline.push({
-          status: order.status,
-          note: 'Payment proof uploaded by customer',
-          timestamp: new Date(),
-          updatedBy: req.user.id
-        });
-
-        await order.save();
-
-        res.json({
-          status: 'success',
-          message: 'Payment proof uploaded successfully',
-          data: { 
-            order,
-            paymentProof: order.paymentDetails.paymentProof
-          }
-        });
-      } catch (uploadError) {
-        console.error('Cloudinary upload error:', uploadError);
-        res.status(500).json({
-          status: 'error',
-          message: 'Failed to upload payment proof'
-        });
-      }
-    } catch (error) {
-      console.error('Upload payment proof error:', error);
-      res.status(500).json({
-        status: 'error',
-        message: 'Internal server error'
-      });
-    }
-  },
-
-  // Update payment details
-  async updatePaymentDetails(req, res) {
-    try {
-      const { paymentDetails } = req.body;
-      const order = await Order.findById(req.params.id);
-
-      if (!order) {
-        return res.status(404).json({
-          status: 'error',
-          message: 'Order not found'
-        });
-      }
-
-      // Check if user owns the order
-      if (order.user.toString() !== req.user.id) {
-        return res.status(403).json({
-          status: 'error',
-          message: 'Access denied'
-        });
-      }
-
-      // Check if order allows payment updates
-      if (!['awaiting_approval', 'pending'].includes(order.status)) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Payment details cannot be updated for this order'
-        });
-      }
-
-      // Update payment details
-      order.paymentDetails = {
-        ...order.paymentDetails,
-        ...paymentDetails
-      };
-
-      if (paymentDetails.transactionId) {
-        order.paymentStatus = 'completed';
-        order.timeline.push({
-          status: order.status,
-          note: 'Payment details updated',
-          timestamp: new Date(),
-          updatedBy: req.user.id
-        });
-      }
-
-      await order.save();
-
-      res.json({
-        status: 'success',
-        message: 'Payment details updated successfully',
-        data: { order }
-      });
-    } catch (error) {
-      console.error('Update payment details error:', error);
-      res.status(500).json({
-        status: 'error',
-        message: 'Internal server error'
-      });
-    }
-  },
+  // Manual payment proof/details endpoints removed (online payments handled by Cashfree)
 
   // Cancel order (only for ongoing orders)
   async cancelOrder(req, res) {
@@ -996,7 +795,6 @@ const orderController = {
   }
 };
 
-// Export upload middleware along with controller
-orderController.uploadPaymentProofMiddleware = upload.single('paymentProof');
+// Legacy upload middleware removed (manual payment proof no longer supported)
 
 module.exports = orderController;

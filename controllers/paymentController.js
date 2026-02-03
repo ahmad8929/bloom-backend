@@ -1,421 +1,426 @@
 // controllers/paymentController.js
 const axios = require('axios');
-const crypto = require('crypto');
 const Order = require('../models/Order');
 const Cart = require('../models/Cart');
+const Product = require('../models/Product');
+const User = require('../models/User');
+const Coupon = require('../models/Coupon');
+const crypto = require('crypto');
 
-const CASHFREE_ENV = process.env.CASHFREE_ENVIRONMENT || 'SANDBOX';
-
-const CASHFREE_BASE = 'https://api.cashfree.com';
-
-const CASHFREE_HEADERS = {
-  'x-client-id': process.env.CASHFREE_APP_ID,
-  'x-client-secret': process.env.CASHFREE_SECRET_KEY,
-  'x-api-version': '2023-08-01',
-  'Content-Type': 'application/json'
+// Get Cashfree API base URL
+const getCashfreeBaseURL = () => {
+  const environment = process.env.CASHFREE_ENVIRONMENT || 'TEST';
+  return environment === 'PRODUCTION' 
+    ? 'https://api.cashfree.com' 
+    : 'https://sandbox.cashfree.com';
 };
 
-/**
- * Helper: validate env vars early
- */
-function validateCashfreeEnv() {
-  if (!process.env.CASHFREE_APP_ID) return 'CASHFREE_APP_ID missing';
-  if (!process.env.CASHFREE_SECRET_KEY) return 'CASHFREE_SECRET_KEY missing';
-  if (!process.env.CASHFREE_ENVIRONMENT) return 'CASHFREE_ENVIRONMENT missing';
-  return null;
-}
-
-module.exports = {
-  // ======================
-  // CREATE PAYMENT SESSION
-  // ======================
-async createPaymentSession(req, res) {
-  console.log('🟡 [Cashfree] Create session called');
-
-  // 🔍 ENV DEBUG (visible in Render logs)
-  console.log('🧪 Cashfree ENV CHECK', {
-    env: CASHFREE_ENV,
-    hasAppId: !!process.env.CASHFREE_APP_ID,
-    hasSecret: !!process.env.CASHFREE_SECRET_KEY,
-    frontendURL: process.env.FRONTEND_URL
-  });
-
-  try {
-    // ❌ ENV VALIDATION
-    const envError = validateCashfreeEnv();
-    if (envError) {
-      console.error('❌ Cashfree ENV error:', envError);
-      return res.status(500).json({
-        message: 'Payment config error',
-        error: envError
-      });
-    }
-
-    // 🛒 CART
-    const cart = await Cart.findOne({ userId: req.user.id }).populate(
-      'items.product'
-    );
-
-    if (!cart || cart.items.length === 0) {
-      console.warn('⚠️ Cart empty for user:', req.user.id);
-      return res.status(400).json({ message: 'Cart empty' });
-    }
-
-    // 📦 ORDER NUMBER
-    const orderNumber = `BT-${Date.now()}-${Math.floor(
-      Math.random() * 1000
-    )}`;
-
-    // 📍 SHIPPING ADDRESS (REQUIRED BY SCHEMA)
-    const { shippingAddress } = req.body;
-
-    if (!shippingAddress) {
-      console.error('❌ Shipping address missing');
-      return res.status(400).json({
-        message: 'Shipping address missing'
-      });
-    }
-
-    // 🧾 BUILD ORDER ITEMS (price REQUIRED)
-    const orderItems = cart.items.map(item => {
-      if (!item.product || typeof item.product.price !== 'number') {
-        throw new Error(`Invalid product price for item ${item._id}`);
-      }
-
-      return {
-        product: item.product._id,
-        quantity: item.quantity,
-        size: item.size,
-        price: item.product.price // 🔴 REQUIRED by schema
-      };
-    });
-
-    // 💰 SUBTOTAL (REQUIRED BY SCHEMA)
-    const subtotal = orderItems.reduce(
-      (sum, item) => sum + item.price * item.quantity,
-      0
-    );
-
-    if (!subtotal || subtotal < 1) {
-      console.error('❌ Invalid subtotal:', subtotal);
-      return res.status(400).json({
-        message: 'Invalid order subtotal'
-      });
-    }
-
-    // 👤 CUSTOMER DETAILS (Cashfree strict)
-    const customerEmail = shippingAddress.email || req.user.email;
-    const customerPhone =
-      shippingAddress.phone && /^[0-9]{10}$/.test(shippingAddress.phone)
-        ? shippingAddress.phone
-        : '9999999999';
-
-    if (!customerEmail) {
-      console.error('❌ Customer email missing');
-      return res.status(400).json({
-        message: 'Customer email missing'
-      });
-    }
-
-    // 🧾 CREATE ORDER (SCHEMA-SAFE)
-    const order = await Order.create({
-      orderNumber,
-      user: req.user.id,
-
-      items: orderItems,
-      subtotal,
-      totalAmount: subtotal,
-
-      shippingAddress: {
-        fullName: shippingAddress.fullName,
-        email: customerEmail,
-        phone: customerPhone,
-        address: shippingAddress.address,
-        city: shippingAddress.city,
-        state: shippingAddress.state,
-        pincode: shippingAddress.pincode,
-        nearbyPlaces: shippingAddress.nearbyPlaces || ''
-      },
-
-      paymentMethod: 'cashfree',
-      paymentStatus: 'pending',
-      status: 'pending'
-    });
-
-    console.log('✅ Order created', {
-      orderNumber,
-      subtotal,
-      user: req.user.id
-    });
-
-    // 💳 CASHFREE API CALL
-    let cfResponse;
-    try {
-      cfResponse = await axios.post(
-        `${CASHFREE_BASE}/pg/orders`,
-        {
-          order_id: orderNumber,
-          order_amount: subtotal,
-          order_currency: 'INR',
-          customer_details: {
-            customer_id: req.user.id.toString(),
-            customer_email: customerEmail,
-            customer_phone: customerPhone
-          },
-          order_meta: {
-            return_url: `${process.env.FRONTEND_URL}/checkout/payment-success?order_id=${orderNumber}`
-          }
-        },
-        { headers: CASHFREE_HEADERS }
-      );
-    } catch (cfError) {
-      console.error('❌ Cashfree API FAILED', {
-        status: cfError.response?.status,
-        data: cfError.response?.data,
-        message: cfError.message
-      });
-
-      return res.status(500).json({
-        message: 'Cashfree order creation failed',
-        error: cfError.response?.data || cfError.message
-      });
-    }
-
-    // 💾 SAVE CASHFREE DETAILS
-    order.paymentDetails = {
-      cashfreeOrderId: cfResponse.data.order_id,
-      cashfreeSessionId: cfResponse.data.payment_session_id
-    };
-
-    await order.save();
-
-    console.log('✅ Cashfree session created', {
-      orderNumber,
-      cashfreeOrderId: cfResponse.data.order_id
-    });
-
-    // ✅ FINAL RESPONSE
-    return res.json({
-      status: 'success',
-      data: {
-        paymentSessionId: cfResponse.data.payment_session_id,
-        orderNumber,
-        amount: subtotal
-      }
-    });
-  } catch (err) {
-    console.error('🔥 createPaymentSession crash', err);
-    return res.status(500).json({
-      message: 'Payment session failed',
-      error: err.message
-    });
+// Get Cashfree API headers
+const getCashfreeHeaders = () => {
+  const appId = process.env.CASHFREE_APP_ID
+  const secretKey = process.env.CASHFREE_SECRET_KEY
+  
+  if (!appId || !secretKey) {
+    throw new Error('Cashfree credentials not configured. Please set CASHFREE_APP_ID and CASHFREE_SECRET_KEY in your .env file');
   }
-},
+  
+  return {
+    'x-client-id': appId,
+    'x-client-secret': secretKey,
+    'x-api-version': '2023-08-01',
+    'Content-Type': 'application/json'
+  };
+};
 
-
-  // ======================
-  // CASHFREE WEBHOOK
-  // ======================
-  async handleWebhook(req, res) {
-    console.log('🔔 Cashfree webhook received');
-
+const paymentController = {
+  // Create payment session for Cashfree
+  async createPaymentSession(req, res) {
     try {
-      const signature = req.headers['x-webhook-signature'];
-      const timestamp = req.headers['x-webhook-timestamp'];
-      const secret = process.env.CASHFREE_WEBHOOK_SECRET;
+      const { shippingAddress, couponCode } = req.body;
 
-      if (!signature || !timestamp || !secret) {
-        console.error('❌ Webhook header/secret missing');
-        return res.status(400).send('Invalid webhook');
-      }
-
-      const rawBody = req.body.toString();
-      const signedPayload = `${timestamp}.${rawBody}`;
-
-      const expectedSignature = crypto
-        .createHmac('sha256', secret)
-        .update(signedPayload)
-        .digest('base64');
-
-      if (signature !== expectedSignature) {
-        console.error('❌ Webhook signature mismatch');
-        return res.status(401).send('Invalid signature');
-      }
-
-      const payload = JSON.parse(rawBody);
-      const { order, payment } = payload.data;
-
-      console.log('📦 Webhook payload', {
-        orderId: order.order_id,
-        status: payment.payment_status
+      // Get user's cart
+      const cart = await Cart.findOne({ userId: req.user.id }).populate({
+        path: 'items.product',
+        select: 'name price comparePrice images size material slug'
       });
 
-      const dbOrder = await Order.findOne({
-        'paymentDetails.cashfreeOrderId': order.order_id
+      if (!cart || cart.items.length === 0) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Cart is empty'
+        });
+      }
+
+      // Validate stock for all items
+      for (const item of cart.items) {
+        const product = await Product.findById(item.productId);
+        if (!product) {
+          return res.status(404).json({
+            status: 'error',
+            message: `Product not found for item ${item.productId}`
+          });
+        }
+
+        if (product.variants && product.variants.length > 0) {
+          if (item.size) {
+            const variantStock = product.getVariantStock(item.size);
+            if (variantStock === null || variantStock < item.quantity) {
+              return res.status(400).json({
+                status: 'error',
+                message: `Insufficient stock for ${product.name} (Size: ${item.size})`
+              });
+            }
+          }
+        } else if (product.trackQuantity && product.quantity < item.quantity) {
+          return res.status(400).json({
+            status: 'error',
+            message: `Insufficient stock for ${product.name}`
+          });
+        }
+      }
+
+      // Calculate totals
+      const originalSubtotal = cart.totalAmount;
+      let automaticDiscount = 0;
+      let couponDiscount = 0;
+      let coupon = null;
+
+      // Apply automatic discount
+      if (originalSubtotal > 20000) {
+        automaticDiscount = Math.round(originalSubtotal * 0.10);
+      } else if (originalSubtotal > 10000) {
+        automaticDiscount = Math.round(originalSubtotal * 0.04);
+      }
+
+      // Validate and apply coupon if provided
+      if (couponCode) {
+        coupon = await Coupon.findOne({ code: couponCode.toUpperCase() });
+        
+        if (!coupon) {
+          return res.status(400).json({
+            status: 'error',
+            message: 'Invalid coupon code'
+          });
+        }
+
+        const validityCheck = coupon.isValid(req.user.id);
+        if (!validityCheck.valid) {
+          return res.status(400).json({
+            status: 'error',
+            message: validityCheck.message
+          });
+        }
+
+        const subtotalAfterAutoDiscount = originalSubtotal - automaticDiscount;
+        const discountCalculation = coupon.calculateDiscount(subtotalAfterAutoDiscount);
+        if (!discountCalculation.valid) {
+          return res.status(400).json({
+            status: 'error',
+            message: discountCalculation.message
+          });
+        }
+
+        couponDiscount = discountCalculation.discountAmount;
+      }
+
+      // Total discount
+      const totalDiscount = automaticDiscount + couponDiscount;
+      const subtotalAfterDiscount = originalSubtotal - totalDiscount;
+
+      // Online payment: Free shipping
+      const shipping = 0;
+      const totalAmount = subtotalAfterDiscount + shipping;
+
+      // Get user details
+      const user = await User.findById(req.user.id);
+      if (!user) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'User not found'
+        });
+      }
+
+      // Create order first (in pending state)
+      const order = new Order({
+        user: req.user.id,
+        items: cart.items.map(item => ({
+          product: item.product._id,
+          productId: item.product._id,
+          name: item.product.name,
+          price: item.product.price,
+          quantity: item.quantity,
+          size: item.size || item.product.size,
+          color: item.color || item.product.color || null,
+          image: item.product.images[0]?.url
+        })),
+        shippingAddress,
+        paymentMethod: 'cashfree',
+        subtotal: originalSubtotal,
+        discount: totalDiscount,
+        shipping,
+        advancePayment: 0,
+        tax: 0,
+        totalAmount,
+        couponCode: couponCode ? couponCode.toUpperCase() : undefined,
+        status: 'pending',
+        paymentStatus: 'pending',
+        adminApproval: {
+          status: 'pending'
+        },
+        timeline: [{
+          status: 'pending',
+          note: 'Order created with Cashfree payment. Awaiting payment confirmation.',
+          timestamp: new Date(),
+          updatedBy: req.user.id
+        }]
       });
 
+      await order.save();
+
+      // Create payment session using Cashfree REST API
+      const baseURL = getCashfreeBaseURL();
+      const headers = getCashfreeHeaders();
+      
+      // Ensure order amount is a number and at least 1
+      const orderAmount = Math.max(1, Math.round(totalAmount * 100) / 100); // Round to 2 decimal places
+      
+      const sessionRequest = {
+        order_id: order.orderNumber,
+        order_amount: orderAmount, // Must be a number, not string
+        order_currency: 'INR',
+        order_meta: {
+          return_url: `${process.env.FRONTEND_URL}/checkout/payment-success?order_id={order_id}`,
+          notify_url: `${process.env.BACKEND_URL || process.env.FRONTEND_URL}/api/payments/cashfree/webhook`,
+          payment_methods: 'cc,dc,upi,nb,wallet,paylater'
+        },
+        customer_details: {
+          customer_id: req.user.id.toString(),
+          customer_name: (shippingAddress.fullName || `${user.firstName} ${user.lastName}`).substring(0, 100), // Max 100 chars
+          customer_email: shippingAddress.email || user.email,
+          customer_phone: (shippingAddress.phone || user.phone || '9999999999').replace(/\D/g, '').substring(0, 10) // Only digits, max 10
+        },
+        order_note: `Order from Bloom Tales - ${order.orderNumber}`.substring(0, 200) // Max 200 chars
+      };
+      
+      // Validate required fields
+      if (!sessionRequest.order_id || !sessionRequest.order_amount || !sessionRequest.customer_details.customer_email) {
+        await Order.findByIdAndDelete(order._id);
+        return res.status(400).json({
+          status: 'error',
+          message: 'Missing required fields for payment session',
+          error: {
+            order_id: !!sessionRequest.order_id,
+            order_amount: !!sessionRequest.order_amount,
+            customer_email: !!sessionRequest.customer_details.customer_email
+          }
+        });
+      }
+
+      try {
+        console.log('Creating Cashfree payment session:', {
+          url: `${baseURL}/pg/orders`,
+          orderId: order.orderNumber,
+          amount: totalAmount
+        });
+
+        const response = await axios.post(
+          `${baseURL}/pg/orders`,
+          sessionRequest,
+          { headers }
+        );
+
+        const sessionResponse = response.data;
+        console.log('Cashfree API response:', sessionResponse);
+
+        if (!sessionResponse || !sessionResponse.payment_session_id) {
+          // Delete the order if session creation fails
+          await Order.findByIdAndDelete(order._id);
+          return res.status(500).json({
+            status: 'error',
+            message: 'Failed to create payment session',
+            error: sessionResponse
+          });
+        }
+
+        // Store payment session ID in order
+        order.paymentDetails = {
+          ...order.paymentDetails,
+          cashfreeSessionId: sessionResponse.payment_session_id,
+          cashfreeOrderId: sessionResponse.order_id
+        };
+        await order.save();
+
+        res.json({
+          status: 'success',
+          data: {
+            paymentSessionId: sessionResponse.payment_session_id,
+            orderId: order._id,
+            orderNumber: order.orderNumber,
+            amount: totalAmount
+          }
+        });
+      } catch (apiError) {
+        // Delete the order if API call fails
+        await Order.findByIdAndDelete(order._id);
+        
+        console.error('Cashfree API error details:');
+        console.error('Status:', apiError.response?.status);
+        console.error('Status Text:', apiError.response?.statusText);
+        console.error('Response Data:', JSON.stringify(apiError.response?.data, null, 2));
+        console.error('Request URL:', apiError.config?.url);
+        console.error('Request Headers:', apiError.config?.headers);
+        console.error('Request Data:', JSON.stringify(apiError.config?.data, null, 2));
+        console.error('Error Message:', apiError.message);
+        
+        return res.status(apiError.response?.status || 500).json({
+          status: 'error',
+          message: 'Failed to create payment session',
+          error: process.env.NODE_ENV === 'development' 
+            ? {
+                status: apiError.response?.status,
+                statusText: apiError.response?.statusText,
+                data: apiError.response?.data,
+                message: apiError.message,
+                requestUrl: apiError.config?.url
+              }
+            : 'Please check your Cashfree credentials and try again'
+        });
+      }
+    } catch (error) {
+      console.error('Create payment session error:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Internal server error',
+        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      });
+    }
+  },
+
+  // Handle Cashfree webhook
+  async handleWebhook(req, res) {
+    try {
+      const webhookSecret = process.env.CASHFREE_WEBHOOK_SECRET;
+      const signature = req.headers['x-cashfree-signature'];
+
+      // Verify webhook signature
+      if (webhookSecret && signature) {
+        const payload = JSON.stringify(req.body);
+        const expectedSignature = crypto
+          .createHmac('sha256', webhookSecret)
+          .update(payload)
+          .digest('hex');
+
+        if (signature !== expectedSignature) {
+          console.error('Invalid webhook signature');
+          return res.status(401).json({ status: 'error', message: 'Invalid signature' });
+        }
+      }
+
+      const { data } = req.body;
+      const { order, payment } = data || {};
+
+      if (!order || !payment) {
+        return res.status(400).json({ status: 'error', message: 'Invalid webhook data' });
+      }
+
+      // Find order by order number
+      const dbOrder = await Order.findOne({ orderNumber: order.orderId });
       if (!dbOrder) {
-        console.warn('⚠️ Order not found for webhook');
-        return res.status(200).send('Order not found');
+        console.error('Order not found:', order.orderId);
+        return res.status(404).json({ status: 'error', message: 'Order not found' });
       }
 
-      // 🔁 IDEMPOTENCY
-      if (
-        dbOrder.paymentDetails?.cashfreePaymentId === payment.cf_payment_id
-      ) {
-        console.log('🔁 Webhook already processed');
-        return res.status(200).send('Already processed');
-      }
+      // Update payment details
+      dbOrder.paymentDetails = {
+        ...dbOrder.paymentDetails,
+        cashfreePaymentId: payment.paymentId,
+        cashfreeTransactionId: payment.txId,
+        cashfreePaymentMethod: payment.paymentMethod,
+        cashfreePaymentStatus: payment.paymentStatus,
+        cashfreeAmount: payment.paymentAmount?.value || payment.paymentAmount,
+        cashfreeCurrency: payment.paymentAmount?.currency || 'INR',
+        paymentDate: new Date(payment.paymentTime || Date.now())
+      };
 
-      if (payment.payment_status === 'SUCCESS') {
+      // Update order status based on payment status
+      if (payment.paymentStatus === 'SUCCESS') {
         dbOrder.paymentStatus = 'completed';
         dbOrder.status = 'awaiting_approval';
-        dbOrder.paymentDetails.cashfreePaymentId =
-          payment.cf_payment_id;
+        dbOrder.timeline.push({
+          status: 'awaiting_approval',
+          note: `Payment successful via Cashfree. Transaction ID: ${payment.txId}`,
+          timestamp: new Date(),
+          updatedBy: dbOrder.user
+        });
 
-        await Cart.updateOne(
-          { userId: dbOrder.user },
-          { items: [] }
-        );
-      }
+        // Update coupon usage if coupon was applied
+        if (dbOrder.couponCode) {
+          const coupon = await Coupon.findOne({ code: dbOrder.couponCode });
+          if (coupon) {
+            coupon.usageCount += 1;
+            coupon.usageHistory.push({
+              userId: dbOrder.user,
+              orderId: dbOrder._id,
+              discountAmount: dbOrder.discount,
+              orderAmount: dbOrder.subtotal,
+              usedAt: new Date()
+            });
+            await coupon.save();
+          }
+        }
 
-      if (payment.payment_status === 'FAILED') {
+        // Clear cart
+        const cart = await Cart.findOne({ userId: dbOrder.user });
+        if (cart) {
+          cart.items = [];
+          await cart.save();
+        }
+      } else if (payment.paymentStatus === 'FAILED') {
         dbOrder.paymentStatus = 'failed';
         dbOrder.status = 'cancelled';
+        dbOrder.timeline.push({
+          status: 'cancelled',
+          note: `Payment failed via Cashfree. Reason: ${payment.paymentMessage || 'Unknown'}`,
+          timestamp: new Date(),
+          updatedBy: dbOrder.user
+        });
       }
 
       await dbOrder.save();
-      console.log('✅ Webhook processed successfully');
 
-      res.status(200).json({ received: true });
-    } catch (err) {
-      console.error('🔥 Webhook crash', err);
-      res.status(500).send('Webhook error');
+      res.json({ status: 'success' });
+    } catch (error) {
+      console.error('Webhook error:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Webhook processing failed'
+      });
     }
   },
-  
-  // ======================
-  // REFUND
-  // ======================
-  async refundPayment(req, res) {
+
+  // Verify payment status by order ID
+  async verifyPayment(req, res) {
     try {
-      const order = await Order.findById(req.params.orderId);
-      if (!order || order.paymentStatus !== 'completed') {
-        return res.status(400).json({ message: 'Refund not allowed' });
+      const { orderId } = req.params;
+
+      const order = await Order.findById(orderId);
+      if (!order) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Order not found'
+        });
       }
 
-      await axios.post(
-        `${CASHFREE_BASE}/pg/refunds`,
-        {
-          refund_id: `refund_${Date.now()}`,
-          refund_amount: order.totalAmount,
-          refund_note: 'Order cancelled'
-        },
-        { headers: CASHFREE_HEADERS }
-      );
-
-      order.paymentStatus = 'refunded';
-      order.status = 'refunded';
-      await order.save();
-
-      res.json({ message: 'Refund initiated' });
-    } catch (err) {
-      console.error(err);
-      res.status(500).json({ message: 'Refund failed' });
-    }
-  },
-
-  // ======================
-// VERIFY PAYMENT BY ORDER NUMBER
-// ======================
-
-async  verifyPaymentByOrderNumber(req, res) {
-  try {
-    const { orderNumber } = req.params;
-
-    if (!orderNumber) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Order number is required'
-      });
-    }
-
-    // 1️⃣ Fetch order from DB
-    const order = await Order.findOne({ orderNumber });
-
-    if (!order) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Order not found'
-      });
-    }
-
-    /**
-     * 2️⃣ WEBHOOK WINS (source of truth)
-     */
-    if (order.paymentStatus === 'completed') {
-      return res.json({
-        status: 'success',
-        data: {
-          order,
-          paymentStatus: 'completed'
-        }
-      });
-    }
-
-    if (order.paymentStatus === 'failed') {
-      return res.json({
-        status: 'success',
-        data: {
-          order,
-          paymentStatus: 'failed'
-        }
-      });
-    }
-
-    /**
-     * 3️⃣ FALLBACK → VERIFY WITH CASHFREE
-     * (only if still pending)
-     */
-    if (!order.paymentDetails?.cashfreeOrderId) {
-      return res.json({
-        status: 'success',
-        data: {
-          order,
-          paymentStatus: 'pending'
-        }
-      });
-    }
-
-    try {
-      const cfRes = await axios.get(
-        `${CASHFREE_BASE}/pg/orders/${order.paymentDetails.cashfreeOrderId}`,
-        { headers: CASHFREE_HEADERS }
-      );
-
-      const cfStatus = cfRes.data?.payment_status;
-
-
-      // ✅ SUCCESS
-      if (cfStatus === 'SUCCESS') {
-        order.paymentStatus = 'completed';
-        order.status = 'awaiting_approval';
-
-        order.timeline.push({
-          status: 'awaiting_approval',
-          note: 'Payment verified via Cashfree API',
-          timestamp: new Date(),
-          updatedBy: order.user
+      // Check if user owns the order
+      if (order.user.toString() !== req.user.id && req.user.role !== 'admin') {
+        return res.status(403).json({
+          status: 'error',
+          message: 'Access denied'
         });
+      }
 
-        await order.save();
-
-        // Clear cart (safe even if already empty)
-        await Cart.updateOne(
-          { userId: order.user },
-          { items: [] }
-        );
-
+      // If payment is already completed, return order status
+      if (order.paymentStatus === 'completed') {
         return res.json({
           status: 'success',
           data: {
@@ -425,54 +430,279 @@ async  verifyPaymentByOrderNumber(req, res) {
         });
       }
 
-      // ❌ FAILED
-      if (cfStatus === 'FAILED' || cfStatus === 'CANCELLED') {
-        order.paymentStatus = 'failed';
-        order.status = 'cancelled';
+      // Verify payment with Cashfree
+      if (order.paymentDetails?.cashfreeOrderId) {
+        try {
+          const baseURL = getCashfreeBaseURL();
+          const headers = getCashfreeHeaders();
+          
+          const orderResponse = await axios.get(
+            `${baseURL}/pg/orders/${order.paymentDetails.cashfreeOrderId}`,
+            { headers }
+          );
 
-        order.timeline.push({
-          status: 'cancelled',
-          note: 'Payment failed via Cashfree API',
-          timestamp: new Date(),
-          updatedBy: order.user
+          const orderData = orderResponse.data;
+          
+          // Cashfree API returns payment_status in different possible formats
+          const paymentStatus = orderData?.payment_status || orderData?.order_status || orderData?.status;
+          
+          console.log('Cashfree order verification (by ID) response:', {
+            orderId: order._id,
+            paymentStatus: paymentStatus,
+            orderDataKeys: Object.keys(orderData || {})
+          });
+
+          // Check for successful payment (Cashfree uses 'SUCCESS' or 'PAID' status)
+          if (orderData && (paymentStatus === 'SUCCESS' || paymentStatus === 'PAID')) {
+            // Update order status
+            order.paymentStatus = 'completed';
+            order.status = 'awaiting_approval';
+            order.paymentDetails = {
+              ...order.paymentDetails,
+              cashfreePaymentStatus: 'SUCCESS',
+              paymentDate: new Date()
+            };
+            
+            // Add timeline entry
+            order.timeline.push({
+              status: 'awaiting_approval',
+              note: `Payment verified successfully via Cashfree. Transaction ID: ${orderData.payment_details?.cf_payment_id || 'N/A'}`,
+              timestamp: new Date(),
+              updatedBy: order.user
+            });
+            
+            await order.save();
+
+            // Update coupon usage if coupon was applied
+            if (order.couponCode) {
+              const coupon = await Coupon.findOne({ code: order.couponCode });
+              if (coupon) {
+                coupon.usageCount += 1;
+                coupon.usageHistory.push({
+                  userId: order.user,
+                  orderId: order._id,
+                  discountAmount: order.discount,
+                  orderAmount: order.subtotal,
+                  usedAt: new Date()
+                });
+                await coupon.save();
+              }
+            }
+
+            // Clear cart
+            const cart = await Cart.findOne({ userId: order.user });
+            if (cart) {
+              cart.items = [];
+              await cart.save();
+            }
+
+            return res.json({
+              status: 'success',
+              data: {
+                order,
+                paymentStatus: 'completed'
+              }
+            });
+          } else if (orderData && (paymentStatus === 'FAILED' || paymentStatus === 'CANCELLED')) {
+            order.paymentStatus = 'failed';
+            order.status = 'cancelled';
+            order.timeline.push({
+              status: 'cancelled',
+              note: 'Payment failed via Cashfree',
+              timestamp: new Date(),
+              updatedBy: order.user
+            });
+            await order.save();
+          }
+        } catch (verifyError) {
+          console.error('Payment verification error:', verifyError);
+        }
+      }
+
+      res.json({
+        status: 'success',
+        data: {
+          order,
+          paymentStatus: order.paymentStatus
+        }
+      });
+    } catch (error) {
+      console.error('Verify payment error:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Internal server error'
+      });
+    }
+  },
+
+  // Verify payment status by order number
+  async verifyPaymentByOrderNumber(req, res) {
+    try {
+      const { orderNumber } = req.params;
+
+      const order = await Order.findOne({ orderNumber });
+      if (!order) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Order not found'
         });
+      }
 
-        await order.save();
+      // Check if user owns the order (no auth required for this endpoint as it's called from payment success page)
+      // But we can verify ownership if user is authenticated
+      if (req.user && order.user.toString() !== req.user.id && req.user.role !== 'admin') {
+        return res.status(403).json({
+          status: 'error',
+          message: 'Access denied'
+        });
+      }
 
+      // If payment is already completed, return order status
+      if (order.paymentStatus === 'completed') {
         return res.json({
           status: 'success',
           data: {
             order,
-            paymentStatus: 'failed'
+            paymentStatus: 'completed'
           }
         });
       }
 
-    } catch (cfError) {
-      // DO NOT FAIL — webhook may still arrive
-      console.warn(
-        '⚠️ Cashfree verify API error:',
-        cfError.response?.data || cfError.message
-      );
-    }
+      // Verify payment with Cashfree
+      if (order.paymentDetails?.cashfreeOrderId || order.orderNumber) {
+        try {
+          const baseURL = getCashfreeBaseURL();
+          const headers = getCashfreeHeaders();
+          
+          // Use orderNumber as Cashfree order_id
+          const cashfreeOrderId = order.paymentDetails?.cashfreeOrderId || order.orderNumber;
+          
+          const orderResponse = await axios.get(
+            `${baseURL}/pg/orders/${cashfreeOrderId}`,
+            { headers }
+          );
 
-    /**
-     * 4️⃣ STILL PENDING
-     */
-    return res.json({
-      status: 'success',
-      data: {
-        order,
-        paymentStatus: 'pending'
+          const orderData = orderResponse.data;
+          
+          // Cashfree API returns payment_status in different possible formats
+          const paymentStatus = orderData?.payment_status || orderData?.order_status || orderData?.status;
+          
+          console.log('Cashfree order verification response:', {
+            orderNumber: order.orderNumber,
+            cashfreeOrderId: cashfreeOrderId,
+            paymentStatus: paymentStatus,
+            orderDataKeys: Object.keys(orderData || {}),
+            fullResponse: JSON.stringify(orderData, null, 2)
+          });
+
+          // Check for successful payment (Cashfree uses 'SUCCESS' or 'PAID' status)
+          if (orderData && (paymentStatus === 'SUCCESS' || paymentStatus === 'PAID')) {
+            // Update order status
+            order.paymentStatus = 'completed';
+            order.status = 'awaiting_approval';
+            
+            // Update payment details
+            if (orderData.payment_details) {
+              order.paymentDetails = {
+                ...order.paymentDetails,
+                cashfreePaymentId: orderData.payment_details.cf_payment_id,
+                cashfreeTransactionId: orderData.payment_details.cf_payment_id,
+                cashfreePaymentMethod: orderData.payment_details.payment_method,
+                cashfreePaymentStatus: 'SUCCESS',
+                cashfreeAmount: orderData.order_amount,
+                cashfreeCurrency: orderData.order_currency || 'INR',
+                paymentDate: new Date(orderData.payment_time || Date.now())
+              };
+            } else {
+              order.paymentDetails = {
+                ...order.paymentDetails,
+                cashfreePaymentStatus: 'SUCCESS',
+                paymentDate: new Date()
+              };
+            }
+            
+            // Add timeline entry
+            order.timeline.push({
+              status: 'awaiting_approval',
+              note: `Payment verified successfully via Cashfree. Transaction ID: ${orderData.payment_details?.cf_payment_id || orderData.payment_session_id || 'N/A'}`,
+              timestamp: new Date(),
+              updatedBy: order.user
+            });
+            
+            await order.save();
+
+            // Update coupon usage if coupon was applied
+            if (order.couponCode) {
+              const coupon = await Coupon.findOne({ code: order.couponCode });
+              if (coupon) {
+                coupon.usageCount += 1;
+                coupon.usageHistory.push({
+                  userId: order.user,
+                  orderId: order._id,
+                  discountAmount: order.discount,
+                  orderAmount: order.subtotal,
+                  usedAt: new Date()
+                });
+                await coupon.save();
+              }
+            }
+
+            // Clear cart
+            const cart = await Cart.findOne({ userId: order.user });
+            if (cart) {
+              cart.items = [];
+              await cart.save();
+            }
+
+            return res.json({
+              status: 'success',
+              data: {
+                order,
+                paymentStatus: 'completed'
+              }
+            });
+          } else if (orderData && (paymentStatus === 'FAILED' || paymentStatus === 'CANCELLED')) {
+            order.paymentStatus = 'failed';
+            order.status = 'cancelled';
+            order.timeline.push({
+              status: 'cancelled',
+              note: 'Payment failed via Cashfree',
+              timestamp: new Date(),
+              updatedBy: order.user
+            });
+            await order.save();
+            
+            return res.json({
+              status: 'success',
+              data: {
+                order,
+                paymentStatus: 'failed'
+              }
+            });
+          }
+        } catch (verifyError) {
+          console.error('Payment verification error:', verifyError.response?.data || verifyError.message);
+          // Continue to return current order status even if verification fails
+        }
       }
-    });
 
-  } catch (error) {
-    console.error('🔥 verifyPaymentByOrderNumber crash:', error);
-    return res.status(500).json({
-      status: 'error',
-      message: 'Payment verification failed'
-    });
+      // Return current order status
+      res.json({
+        status: 'success',
+        data: {
+          order,
+          paymentStatus: order.paymentStatus
+        }
+      });
+    } catch (error) {
+      console.error('Verify payment by order number error:', error);
+      res.status(500).json({
+        status: 'error',
+        message: 'Internal server error'
+      });
+    }
   }
-}
 };
+module.exports = paymentController;
+
+

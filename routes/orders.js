@@ -26,14 +26,7 @@ router.post('/:id/cancel', orderController.cancelOrder);
 // GET /api/orders/:id/track - Track order
 router.get('/:id/track', orderController.trackOrder);
 
-// POST /api/orders/:id/payment-proof - Upload payment proof
-router.post('/:id/payment-proof', 
-  orderController.uploadPaymentProofMiddleware,
-  orderController.uploadPaymentProof
-);
-
-// PATCH /api/orders/:id/payment-details - Update payment details
-router.patch('/:id/payment-details', orderController.updatePaymentDetails);
+// Manual payment proof/payment details endpoints removed (online payments handled by Cashfree)
 
 // Admin routes - Require admin authentication
 // These routes are now moved to admin routes but kept here for backward compatibility
