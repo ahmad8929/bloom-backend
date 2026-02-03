@@ -165,7 +165,7 @@ const paymentController = {
         status: 'pending',
         paymentStatus: 'pending',
         adminApproval: {
-          status: 'pending'
+          status: 'approved' // Auto-approved for online payments
         },
         timeline: [{
           status: 'pending',
@@ -189,9 +189,9 @@ const paymentController = {
         order_amount: orderAmount, // Must be a number, not string
         order_currency: 'INR',
         order_meta: {
-          return_url: `${process.env.FRONTEND_URL}/checkout/payment-success?order_id={order_id}`,
-          notify_url: `${process.env.BACKEND_URL || process.env.FRONTEND_URL}/api/payments/cashfree/webhook`,
-          payment_methods: 'cc,dc,upi,nb,wallet,paylater'
+          return_url: `${(process.env.FRONTEND_URL || '').replace(/\/$/, '')}/checkout/payment-success?order_id={order_id}`,
+          notify_url: `${((process.env.BACKEND_URL || process.env.FRONTEND_URL) || '').replace(/\/$/, '')}/api/payments/cashfree/webhook`,
+          payment_methods: 'cc,dc,upi,nb,paylater'
         },
         customer_details: {
           customer_id: req.user.id.toString(),
@@ -345,10 +345,15 @@ const paymentController = {
       // Update order status based on payment status
       if (payment.paymentStatus === 'SUCCESS') {
         dbOrder.paymentStatus = 'completed';
-        dbOrder.status = 'awaiting_approval';
+        dbOrder.status = 'confirmed'; // Directly confirm online payments (no admin approval needed)
+        dbOrder.adminApproval = {
+          status: 'approved',
+          approvedAt: new Date(),
+          approvedBy: dbOrder.user
+        };
         dbOrder.timeline.push({
-          status: 'awaiting_approval',
-          note: `Payment successful via Cashfree. Transaction ID: ${payment.txId}`,
+          status: 'confirmed',
+          note: `Payment successful via Cashfree. Transaction ID: ${payment.txId}. Order auto-confirmed.`,
           timestamp: new Date(),
           updatedBy: dbOrder.user
         });
@@ -456,7 +461,12 @@ const paymentController = {
           if (orderData && (paymentStatus === 'SUCCESS' || paymentStatus === 'PAID')) {
             // Update order status
             order.paymentStatus = 'completed';
-            order.status = 'awaiting_approval';
+            order.status = 'confirmed'; // Directly confirm online payments (no admin approval needed)
+            order.adminApproval = {
+              status: 'approved',
+              approvedAt: new Date(),
+              approvedBy: order.user
+            };
             order.paymentDetails = {
               ...order.paymentDetails,
               cashfreePaymentStatus: 'SUCCESS',
@@ -465,8 +475,8 @@ const paymentController = {
             
             // Add timeline entry
             order.timeline.push({
-              status: 'awaiting_approval',
-              note: `Payment verified successfully via Cashfree. Transaction ID: ${orderData.payment_details?.cf_payment_id || 'N/A'}`,
+              status: 'confirmed',
+              note: `Payment verified successfully via Cashfree. Transaction ID: ${orderData.payment_details?.cf_payment_id || 'N/A'}. Order auto-confirmed.`,
               timestamp: new Date(),
               updatedBy: order.user
             });
@@ -599,7 +609,12 @@ const paymentController = {
           if (orderData && (paymentStatus === 'SUCCESS' || paymentStatus === 'PAID')) {
             // Update order status
             order.paymentStatus = 'completed';
-            order.status = 'awaiting_approval';
+            order.status = 'confirmed'; // Directly confirm online payments (no admin approval needed)
+            order.adminApproval = {
+              status: 'approved',
+              approvedAt: new Date(),
+              approvedBy: order.user
+            };
             
             // Update payment details
             if (orderData.payment_details) {
@@ -623,8 +638,8 @@ const paymentController = {
             
             // Add timeline entry
             order.timeline.push({
-              status: 'awaiting_approval',
-              note: `Payment verified successfully via Cashfree. Transaction ID: ${orderData.payment_details?.cf_payment_id || orderData.payment_session_id || 'N/A'}`,
+              status: 'confirmed',
+              note: `Payment verified successfully via Cashfree. Transaction ID: ${orderData.payment_details?.cf_payment_id || orderData.payment_session_id || 'N/A'}. Order auto-confirmed.`,
               timestamp: new Date(),
               updatedBy: order.user
             });
