@@ -10,7 +10,7 @@ const crypto = require('crypto');
 // Get Cashfree API base URL
 const getCashfreeBaseURL = () => {
   const environment = process.env.CASHFREE_ENVIRONMENT || 'PRODUCTION';
-  const baseURL = environment === 'https://api.cashfree.com';
+  const baseURL = 'https://api.cashfree.com';
   
   console.log('Cashfree Environment:', environment, 'Base URL:', baseURL);
   return baseURL;
@@ -207,7 +207,7 @@ const paymentController = {
         order_meta: {
           return_url: `${(process.env.FRONTEND_URL || '').replace(/\/$/, '')}/checkout/payment-success?order_id={order_id}`,
           notify_url: `${((process.env.BACKEND_URL || process.env.FRONTEND_URL) || '').replace(/\/$/, '')}/api/payments/cashfree/webhook`,
-          payment_methods: 'cc,dc,upi,nb,paylater'
+          payment_methods: [cc,dc,upi,nb,paylater]
         },
         customer_details: {
           customer_id: req.user.id.toString(),
