@@ -76,26 +76,8 @@ const orderSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'awaiting_approval', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled', 'rejected'],
+    enum: ['pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled', 'rejected'],
     default: 'pending'
-  },
-  adminApproval: {
-    status: {
-      type: String,
-      enum: ['pending', 'approved', 'rejected'],
-      default: 'pending'
-    },
-    approvedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
-    },
-    approvedAt: Date,
-    rejectedBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
-    },
-    rejectedAt: Date,
-    remarks: String
   },
   subtotal: {
     type: Number,
@@ -165,7 +147,6 @@ orderSchema.virtual('userOrderCategory').get(function() {
 // Indexes - Define all indexes here (no duplicates)
 orderSchema.index({ user: 1, createdAt: -1 });
 orderSchema.index({ status: 1 });
-orderSchema.index({ 'adminApproval.status': 1 });
 orderSchema.index({ orderNumber: 1 }, { unique: true }); // Only define unique index here
 orderSchema.index({ createdAt: -1 });
 orderSchema.index({ paymentStatus: 1 });

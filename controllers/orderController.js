@@ -159,13 +159,10 @@ const orderController = {
         tax: 0, // No tax as per new requirements
         totalAmount,
         couponCode: couponCode ? couponCode.toUpperCase() : undefined,
-        status: 'awaiting_approval', // Changed to awaiting_approval instead of pending
-        adminApproval: {
-          status: 'pending'
-        },
+        status: 'confirmed', // COD orders are directly confirmed
         timeline: [{
-          status: 'awaiting_approval',
-          note: couponCode ? `Order created with coupon ${couponCode.toUpperCase()} and awaiting admin approval` : 'Order created and awaiting admin approval',
+          status: 'confirmed',
+          note: couponCode ? `Order created with coupon ${couponCode.toUpperCase()}` : 'Order created',
           timestamp: new Date(),
           updatedBy: req.user.id
         }]
@@ -253,7 +250,7 @@ const orderController = {
       if (category) {
         switch (category) {
           case 'ongoing':
-            statusFilter = { status: { $in: ['awaiting_approval', 'confirmed', 'processing', 'shipped'] } };
+            statusFilter = { status: { $in: ['confirmed', 'processing', 'shipped'] } };
             break;
           case 'completed':
             statusFilter = { status: 'delivered' };
@@ -322,8 +319,6 @@ const orderController = {
           select: 'name images slug size material'
         })
         .populate('user', 'firstName lastName email')
-        .populate('adminApproval.approvedBy', 'firstName lastName')
-        .populate('adminApproval.rejectedBy', 'firstName lastName')
         .populate({
           path: 'timeline.updatedBy',
           select: 'firstName lastName'
@@ -381,7 +376,7 @@ const orderController = {
       }
 
       // Check if order can be cancelled
-      if (!['awaiting_approval', 'confirmed'].includes(order.status)) {
+      if (!['confirmed'].includes(order.status)) {
         return res.status(400).json({
           status: 'error',
           message: 'Order cannot be cancelled at this stage'
@@ -418,7 +413,7 @@ const orderController = {
   async trackOrder(req, res) {
     try {
       const order = await Order.findById(req.params.id)
-        .select('orderNumber status tracking timeline createdAt estimatedDelivery trackingNumber adminApproval')
+        .select('orderNumber status tracking timeline createdAt estimatedDelivery trackingNumber')
         .lean();
 
       if (!order) {
@@ -435,7 +430,6 @@ const orderController = {
             orderId: order._id,
             orderNumber: order.orderNumber,
             status: order.status,
-            adminApproval: order.adminApproval,
             trackingNumber: order.trackingNumber,
             estimatedDelivery: order.estimatedDelivery,
             trackingHistory: order.timeline || []
@@ -465,7 +459,7 @@ const orderController = {
             ongoing: { 
               $sum: { 
                 $cond: [
-                  { $in: ['$status', ['awaiting_approval', 'confirmed', 'processing', 'shipped']] }, 
+                  { $in: ['$status', ['confirmed', 'processing', 'shipped']] }, 
                   1, 
                   0
                 ] 
@@ -520,7 +514,6 @@ const orderController = {
       const filter = {};
       if (status) filter.status = status;
       if (paymentStatus) filter.paymentStatus = paymentStatus;
-      if (approvalStatus) filter['adminApproval.status'] = approvalStatus;
       
       if (startDate || endDate) {
         filter.createdAt = {};
@@ -546,8 +539,6 @@ const orderController = {
           path: 'items.product',
           select: 'name images'
         })
-        .populate('adminApproval.approvedBy', 'firstName lastName')
-        .populate('adminApproval.rejectedBy', 'firstName lastName')
         .sort('-createdAt')
         .skip(skip)
         .limit(Number(limit))
@@ -589,50 +580,47 @@ const orderController = {
         });
       }
 
-      if (order.adminApproval.status !== 'pending') {
+      // Orders are now auto-confirmed, but admin can still update status
+      if (order.status === 'cancelled' || order.status === 'delivered') {
         return res.status(400).json({
           status: 'error',
-          message: 'Order has already been processed'
+          message: 'Cannot update status of cancelled or delivered orders'
         });
       }
 
-      order.adminApproval.status = 'approved';
-      order.adminApproval.approvedBy = req.user.id;
-      order.adminApproval.approvedAt = new Date();
-      order.adminApproval.remarks = remarks;
-      order.status = 'confirmed';
+      // Update product quantities when confirming order
+      if (order.status !== 'confirmed' && status === 'confirmed') {
+        for (const item of order.items) {
+          const product = await Product.findById(item.product);
+          if (product && product.trackQuantity) {
+            await Product.findByIdAndUpdate(item.product, {
+              $inc: { 
+                quantity: -item.quantity,
+                'sales.totalSold': item.quantity,
+                'sales.revenue': item.price * item.quantity
+              }
+            });
+          }
+        }
+      }
 
+      order.status = 'confirmed';
       order.timeline.push({
         status: 'confirmed',
-        note: `Order approved by admin. ${remarks ? `Remarks: ${remarks}` : ''}`,
+        note: `Order confirmed by admin. ${remarks ? `Remarks: ${remarks}` : ''}`,
         timestamp: new Date(),
         updatedBy: req.user.id
       });
 
       await order.save();
 
-      // Update product quantities
-      for (const item of order.items) {
-        const product = await Product.findById(item.product);
-        if (product && product.trackQuantity) {
-          await Product.findByIdAndUpdate(item.product, {
-            $inc: { 
-              quantity: -item.quantity,
-              'sales.totalSold': item.quantity,
-              'sales.revenue': item.price * item.quantity
-            }
-          });
-        }
-      }
-
       await order.populate([
-        { path: 'user', select: 'firstName lastName email' },
-        { path: 'adminApproval.approvedBy', select: 'firstName lastName' }
+        { path: 'user', select: 'firstName lastName email' }
       ]);
 
       res.json({
         status: 'success',
-        message: 'Order approved successfully',
+        message: 'Order confirmed successfully',
         data: { order }
       });
     } catch (error) {
@@ -657,17 +645,13 @@ const orderController = {
         });
       }
 
-      if (order.adminApproval.status !== 'pending') {
+      if (order.status === 'cancelled' || order.status === 'delivered') {
         return res.status(400).json({
           status: 'error',
-          message: 'Order has already been processed'
+          message: 'Cannot reject cancelled or delivered orders'
         });
       }
 
-      order.adminApproval.status = 'rejected';
-      order.adminApproval.rejectedBy = req.user.id;
-      order.adminApproval.rejectedAt = new Date();
-      order.adminApproval.remarks = remarks;
       order.status = 'rejected';
       order.rejectedAt = new Date();
       order.rejectReason = remarks || 'Order rejected by admin';
@@ -682,8 +666,7 @@ const orderController = {
       await order.save();
 
       await order.populate([
-        { path: 'user', select: 'firstName lastName email' },
-        { path: 'adminApproval.rejectedBy', select: 'firstName lastName' }
+        { path: 'user', select: 'firstName lastName email' }
       ]);
 
       res.json({
@@ -705,7 +688,7 @@ const orderController = {
     try {
       const { status, note } = req.body;
 
-      const validStatuses = ['pending', 'awaiting_approval', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled', 'rejected'];
+      const validStatuses = ['pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled', 'rejected'];
       if (!validStatuses.includes(status)) {
         return res.status(400).json({
           status: 'error',

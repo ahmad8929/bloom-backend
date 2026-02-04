@@ -141,6 +141,13 @@ const paymentController = {
       }
 
       // Create order first (in pending state)
+      console.log('Creating order for Cashfree payment:', {
+        userId: req.user.id,
+        itemCount: cart.items.length,
+        totalAmount,
+        shippingAddress: shippingAddress.fullName
+      });
+
       const order = new Order({
         user: req.user.id,
         items: cart.items.map(item => ({
@@ -164,18 +171,26 @@ const paymentController = {
         couponCode: couponCode ? couponCode.toUpperCase() : undefined,
         status: 'pending',
         paymentStatus: 'pending',
-        adminApproval: {
-          status: 'approved' // Auto-approved for online payments
-        },
         timeline: [{
           status: 'pending',
           note: 'Order created with Cashfree payment. Awaiting payment confirmation.',
           timestamp: new Date(),
           updatedBy: req.user.id
         }]
+        // Don't set paymentDetails here - it will be set after session creation
       });
 
-      await order.save();
+      try {
+        await order.save();
+        console.log('Order created successfully:', {
+          orderId: order._id,
+          orderNumber: order.orderNumber,
+          status: order.status
+        });
+      } catch (saveError) {
+        console.error('Error saving order:', saveError);
+        throw saveError;
+      }
 
       // Create payment session using Cashfree REST API
       const baseURL = getCashfreeBaseURL();
@@ -220,8 +235,13 @@ const paymentController = {
         console.log('Creating Cashfree payment session:', {
           url: `${baseURL}/pg/orders`,
           orderId: order.orderNumber,
-          amount: totalAmount
+          amount: totalAmount,
+          environment: process.env.CASHFREE_ENVIRONMENT || 'TEST',
+          hasAppId: !!process.env.CASHFREE_APP_ID,
+          hasSecretKey: !!process.env.CASHFREE_SECRET_KEY
         });
+
+        console.log('Session request payload:', JSON.stringify(sessionRequest, null, 2));
 
         const response = await axios.post(
           `${baseURL}/pg/orders`,
@@ -230,7 +250,7 @@ const paymentController = {
         );
 
         const sessionResponse = response.data;
-        console.log('Cashfree API response:', sessionResponse);
+        console.log('Cashfree API response:', JSON.stringify(sessionResponse, null, 2));
 
         if (!sessionResponse || !sessionResponse.payment_session_id) {
           // Delete the order if session creation fails
@@ -243,12 +263,23 @@ const paymentController = {
         }
 
         // Store payment session ID in order
+        // Only set Cashfree-specific fields, don't include paymentProof
         order.paymentDetails = {
-          ...order.paymentDetails,
           cashfreeSessionId: sessionResponse.payment_session_id,
           cashfreeOrderId: sessionResponse.order_id
         };
-        await order.save();
+        
+        try {
+          await order.save();
+          console.log('Order updated with payment session:', {
+            orderId: order._id,
+            orderNumber: order.orderNumber,
+            sessionId: sessionResponse.payment_session_id
+          });
+        } catch (saveError) {
+          console.error('Error saving order with payment session:', saveError);
+          // Don't fail the request if order save fails - session is already created
+        }
 
         res.json({
           status: 'success',
@@ -260,17 +291,24 @@ const paymentController = {
           }
         });
       } catch (apiError) {
-        // Delete the order if API call fails
-        await Order.findByIdAndDelete(order._id);
-        
         console.error('Cashfree API error details:');
         console.error('Status:', apiError.response?.status);
         console.error('Status Text:', apiError.response?.statusText);
         console.error('Response Data:', JSON.stringify(apiError.response?.data, null, 2));
         console.error('Request URL:', apiError.config?.url);
-        console.error('Request Headers:', apiError.config?.headers);
-        console.error('Request Data:', JSON.stringify(apiError.config?.data, null, 2));
+        console.error('Request Method:', apiError.config?.method);
+        console.error('Request Headers:', JSON.stringify(apiError.config?.headers, null, 2));
+        console.error('Request Data:', apiError.config?.data);
         console.error('Error Message:', apiError.message);
+        console.error('Error Stack:', apiError.stack);
+        
+        // Delete the order if API call fails
+        try {
+          await Order.findByIdAndDelete(order._id);
+          console.log('Order deleted after API failure:', order._id);
+        } catch (deleteError) {
+          console.error('Error deleting order after API failure:', deleteError);
+        }
         
         return res.status(apiError.response?.status || 500).json({
           status: 'error',
@@ -288,10 +326,33 @@ const paymentController = {
       }
     } catch (error) {
       console.error('Create payment session error:', error);
+      console.error('Error stack:', error.stack);
+      console.error('Error details:', {
+        message: error.message,
+        name: error.name,
+        code: error.code
+      });
+      
+      // Try to delete order if it was created
+      if (order && order._id) {
+        try {
+          await Order.findByIdAndDelete(order._id);
+          console.log('Order deleted after error:', order._id);
+        } catch (deleteError) {
+          console.error('Error deleting order after error:', deleteError);
+        }
+      }
+      
       res.status(500).json({
         status: 'error',
         message: 'Internal server error',
-        error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        error: process.env.NODE_ENV === 'development' 
+          ? {
+              message: error.message,
+              name: error.name,
+              stack: error.stack
+            }
+          : 'An unexpected error occurred. Please try again.'
       });
     }
   },
@@ -330,9 +391,8 @@ const paymentController = {
         return res.status(404).json({ status: 'error', message: 'Order not found' });
       }
 
-      // Update payment details
-      dbOrder.paymentDetails = {
-        ...dbOrder.paymentDetails,
+      // Update payment details - only set Cashfree fields, don't spread undefined values
+      const paymentDetailsUpdate = {
         cashfreePaymentId: payment.paymentId,
         cashfreeTransactionId: payment.txId,
         cashfreePaymentMethod: payment.paymentMethod,
@@ -341,19 +401,25 @@ const paymentController = {
         cashfreeCurrency: payment.paymentAmount?.currency || 'INR',
         paymentDate: new Date(payment.paymentTime || Date.now())
       };
+      
+      // Only include existing paymentDetails fields that are not undefined
+      if (dbOrder.paymentDetails) {
+        Object.keys(dbOrder.paymentDetails).forEach(key => {
+          if (dbOrder.paymentDetails[key] !== undefined && !paymentDetailsUpdate.hasOwnProperty(key)) {
+            paymentDetailsUpdate[key] = dbOrder.paymentDetails[key];
+          }
+        });
+      }
+      
+      dbOrder.paymentDetails = paymentDetailsUpdate;
 
       // Update order status based on payment status
       if (payment.paymentStatus === 'SUCCESS') {
         dbOrder.paymentStatus = 'completed';
-        dbOrder.status = 'confirmed'; // Directly confirm online payments (no admin approval needed)
-        dbOrder.adminApproval = {
-          status: 'approved',
-          approvedAt: new Date(),
-          approvedBy: dbOrder.user
-        };
+        dbOrder.status = 'confirmed'; // Directly confirm online payments
         dbOrder.timeline.push({
           status: 'confirmed',
-          note: `Payment successful via Cashfree. Transaction ID: ${payment.txId}. Order auto-confirmed.`,
+          note: `Payment successful via Cashfree. Transaction ID: ${payment.txId}. Order confirmed.`,
           timestamp: new Date(),
           updatedBy: dbOrder.user
         });
@@ -461,14 +527,12 @@ const paymentController = {
           if (orderData && (paymentStatus === 'SUCCESS' || paymentStatus === 'PAID')) {
             // Update order status
             order.paymentStatus = 'completed';
-            order.status = 'confirmed'; // Directly confirm online payments (no admin approval needed)
-            order.adminApproval = {
-              status: 'approved',
-              approvedAt: new Date(),
-              approvedBy: order.user
-            };
+            order.status = 'confirmed'; // Directly confirm online payments
+            // Only update Cashfree fields, preserve existing paymentDetails but don't include undefined values
+            const existingDetails = order.paymentDetails || {};
             order.paymentDetails = {
-              ...order.paymentDetails,
+              cashfreeSessionId: existingDetails.cashfreeSessionId,
+              cashfreeOrderId: existingDetails.cashfreeOrderId,
               cashfreePaymentStatus: 'SUCCESS',
               paymentDate: new Date()
             };
@@ -609,17 +673,14 @@ const paymentController = {
           if (orderData && (paymentStatus === 'SUCCESS' || paymentStatus === 'PAID')) {
             // Update order status
             order.paymentStatus = 'completed';
-            order.status = 'confirmed'; // Directly confirm online payments (no admin approval needed)
-            order.adminApproval = {
-              status: 'approved',
-              approvedAt: new Date(),
-              approvedBy: order.user
-            };
+            order.status = 'confirmed'; // Directly confirm online payments
             
-            // Update payment details
+            // Update payment details - only set Cashfree fields, don't include undefined values
+            const existingDetails = order.paymentDetails || {};
             if (orderData.payment_details) {
               order.paymentDetails = {
-                ...order.paymentDetails,
+                cashfreeSessionId: existingDetails.cashfreeSessionId,
+                cashfreeOrderId: existingDetails.cashfreeOrderId,
                 cashfreePaymentId: orderData.payment_details.cf_payment_id,
                 cashfreeTransactionId: orderData.payment_details.cf_payment_id,
                 cashfreePaymentMethod: orderData.payment_details.payment_method,
@@ -630,7 +691,8 @@ const paymentController = {
               };
             } else {
               order.paymentDetails = {
-                ...order.paymentDetails,
+                cashfreeSessionId: existingDetails.cashfreeSessionId,
+                cashfreeOrderId: existingDetails.cashfreeOrderId,
                 cashfreePaymentStatus: 'SUCCESS',
                 paymentDate: new Date()
               };

@@ -17,7 +17,7 @@ const adminController = {
         revenueStats
       ] = await Promise.all([
         Order.countDocuments(),
-        Order.countDocuments({ 'adminApproval.status': 'pending' }),
+        Order.countDocuments({ status: 'pending' }),
         User.countDocuments({ role: 'user' }),
         Product.countDocuments(),
         Order.find()
@@ -354,7 +354,7 @@ async toggleEmailVerification(req, res) {
       const filter = {};
       if (status) filter.status = status;
       if (paymentStatus) filter.paymentStatus = paymentStatus;
-      if (approvalStatus) filter['adminApproval.status'] = approvalStatus;
+      // Approval status filter removed - orders are auto-confirmed
       if (userId) filter.user = userId;
       
       if (startDate || endDate) {
@@ -381,8 +381,6 @@ async toggleEmailVerification(req, res) {
           path: 'items.product',
           select: 'name images price'
         })
-        .populate('adminApproval.approvedBy', 'firstName lastName')
-        .populate('adminApproval.rejectedBy', 'firstName lastName')
         .sort('-createdAt')
         .skip(skip)
         .limit(Number(limit))
@@ -432,8 +430,6 @@ async toggleEmailVerification(req, res) {
           path: 'items.product',
           select: 'name images price size material'
         })
-        .populate('adminApproval.approvedBy', 'firstName lastName')
-        .populate('adminApproval.rejectedBy', 'firstName lastName')
         .populate({
           path: 'timeline.updatedBy',
           select: 'firstName lastName'
@@ -472,94 +468,58 @@ async toggleEmailVerification(req, res) {
         });
       }
 
-      // Allow updating remarks for already approved orders, but prevent re-approval
-      if (order.adminApproval.status === 'rejected') {
+      // Check if order can be confirmed
+      if (order.status === 'cancelled' || order.status === 'delivered' || order.status === 'rejected') {
         return res.status(400).json({
           status: 'error',
-          message: 'Cannot approve a rejected order. Please reject it first or contact support.',
-          currentStatus: order.adminApproval.status
+          message: 'Cannot confirm cancelled, delivered, or rejected orders'
         });
       }
 
-      // If already approved, only update remarks if provided
-      if (order.adminApproval.status === 'approved') {
-        if (remarks && remarks.trim()) {
-          // Update remarks for already approved order
-          order.adminApproval.remarks = remarks;
-          order.timeline.push({
-            status: order.status,
-            note: `Admin remarks updated: ${remarks}`,
-            timestamp: new Date(),
-            updatedBy: req.user.id
-          });
-          await order.save();
-          
-          await order.populate([
-            { path: 'user', select: 'firstName lastName email' },
-            { path: 'adminApproval.approvedBy', select: 'firstName lastName' }
-          ]);
+      // Update product quantities when confirming order
+      if (order.status !== 'confirmed') {
+        for (const item of order.items) {
+          const product = await Product.findById(item.product);
+          if (!product) continue;
 
-          return res.json({
-            status: 'success',
-            message: 'Remarks updated successfully',
-            data: { order }
-          });
-        } else {
-          return res.status(400).json({
-            status: 'error',
-            message: 'Order is already approved. Provide remarks to update them.',
-            currentStatus: order.adminApproval.status
-          });
+          // If product has variants, update variant stock
+          if (product.variants && product.variants.length > 0 && item.size) {
+            const variantIndex = product.variants.findIndex(v => v.size === item.size);
+
+            if (variantIndex > -1) {
+              // Update variant stock
+              product.variants[variantIndex].stock = Math.max(0, product.variants[variantIndex].stock - item.quantity);
+              await product.save();
+            }
+          } else if (product.trackQuantity) {
+            // Legacy: update product quantity directly
+            await Product.findByIdAndUpdate(item.product, {
+              $inc: { 
+                quantity: -item.quantity
+              }
+            });
+          }
         }
       }
 
-      order.adminApproval.status = 'approved';
-      order.adminApproval.approvedBy = req.user.id;
-      order.adminApproval.approvedAt = new Date();
-      order.adminApproval.remarks = remarks;
       order.status = 'confirmed';
 
       order.timeline.push({
         status: 'confirmed',
-        note: `Order approved by admin. ${remarks ? `Remarks: ${remarks}` : ''}`,
+        note: `Order confirmed by admin. ${remarks ? `Remarks: ${remarks}` : ''}`,
         timestamp: new Date(),
         updatedBy: req.user.id
       });
 
       await order.save();
 
-      // Update product quantities (handle variants)
-      for (const item of order.items) {
-        const product = await Product.findById(item.product);
-        if (!product) continue;
-
-        // If product has variants, update variant stock
-        if (product.variants && product.variants.length > 0 && item.size) {
-          const variantIndex = product.variants.findIndex(v => v.size === item.size);
-
-          if (variantIndex > -1) {
-            // Update variant stock
-            product.variants[variantIndex].stock = Math.max(0, product.variants[variantIndex].stock - item.quantity);
-            await product.save();
-          }
-        } else if (product.trackQuantity) {
-          // Legacy: update product quantity directly
-          await Product.findByIdAndUpdate(item.product, {
-            $inc: { 
-              quantity: -item.quantity
-            }
-          });
-        }
-      }
-
       await order.populate([
-        { path: 'user', select: 'firstName lastName email' },
-        { path: 'adminApproval.approvedBy', select: 'firstName lastName' }
+        { path: 'user', select: 'firstName lastName email' }
       ]);
 
       res.json({
         status: 'success',
-        message: 'Order approved successfully',
+        message: 'Order confirmed successfully',
         data: { order }
       });
     } catch (error) {
@@ -592,17 +552,13 @@ async toggleEmailVerification(req, res) {
         });
       }
 
-      if (order.adminApproval.status !== 'pending') {
+      if (order.status === 'cancelled' || order.status === 'delivered') {
         return res.status(400).json({
           status: 'error',
-          message: 'Order has already been processed'
+          message: 'Cannot reject cancelled or delivered orders'
         });
       }
 
-      order.adminApproval.status = 'rejected';
-      order.adminApproval.rejectedBy = req.user.id;
-      order.adminApproval.rejectedAt = new Date();
-      order.adminApproval.remarks = remarks;
       order.status = 'rejected';
       order.rejectedAt = new Date();
       order.rejectReason = remarks;
@@ -617,8 +573,7 @@ async toggleEmailVerification(req, res) {
       await order.save();
 
       await order.populate([
-        { path: 'user', select: 'firstName lastName email' },
-        { path: 'adminApproval.rejectedBy', select: 'firstName lastName' }
+        { path: 'user', select: 'firstName lastName email' }
       ]);
 
       res.json({
