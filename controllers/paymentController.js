@@ -43,6 +43,7 @@ const getCashfreeHeaders = () => {
 const paymentController = {
   // Create payment session for Cashfree
   async createPaymentSession(req, res) {
+      let order; 
     try {
       const { shippingAddress, couponCode } = req.body;
 
@@ -214,7 +215,7 @@ const paymentController = {
         order_meta: {
           return_url: `${(process.env.FRONTEND_URL || '').replace(/\/$/, '')}/checkout/payment-success?order_id={order_id}`,
           notify_url: `${((process.env.BACKEND_URL || process.env.FRONTEND_URL) || '').replace(/\/$/, '')}/api/payments/cashfree/webhook`,
-          payment_methods: [cc,dc,upi,nb,paylater]
+         payment_methods: ["cc", "dc", "upi", "nb", "paylater"]
         },
         customer_details: {
           customer_id: req.user.id.toString(),
