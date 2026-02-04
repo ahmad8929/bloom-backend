@@ -9,12 +9,19 @@ const crypto = require('crypto');
 
 // Get Cashfree API base URL
 const getCashfreeBaseURL = () => {
-  const environment = process.env.CASHFREE_ENVIRONMENT || 'PRODUCTION';
-  const baseURL = 'https://api.cashfree.com';
-  
+  const environment = (process.env.CASHFREE_ENVIRONMENT || 'PRODUCTION').toUpperCase();
+
+  let baseURL;
+  if (environment === 'PRODUCTION') {
+    baseURL = 'https://api.cashfree.com';
+  } else {
+    baseURL = 'https://sandbox.cashfree.com';
+  }
+
   console.log('Cashfree Environment:', environment, 'Base URL:', baseURL);
   return baseURL;
 };
+
 
 // Get Cashfree API headers
 const getCashfreeHeaders = () => {
