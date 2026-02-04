@@ -9,10 +9,11 @@ const crypto = require('crypto');
 
 // Get Cashfree API base URL
 const getCashfreeBaseURL = () => {
-  const environment = process.env.CASHFREE_ENVIRONMENT || 'TEST';
-  return environment === 'PRODUCTION' 
-    ? 'https://api.cashfree.com' 
-    : 'https://sandbox.cashfree.com';
+  const environment = process.env.CASHFREE_ENVIRONMENT || 'PRODUCTION';
+  const baseURL = environment === 'https://api.cashfree.com';
+  
+  console.log('Cashfree Environment:', environment, 'Base URL:', baseURL);
+  return baseURL;
 };
 
 // Get Cashfree API headers
@@ -232,13 +233,16 @@ const paymentController = {
       }
 
       try {
+        const environment = process.env.CASHFREE_ENVIRONMENT || 'PRODUCTION';
         console.log('Creating Cashfree payment session:', {
           url: `${baseURL}/pg/orders`,
           orderId: order.orderNumber,
           amount: totalAmount,
-          environment: process.env.CASHFREE_ENVIRONMENT || 'TEST',
+          environment: environment,
+          baseURL: baseURL,
           hasAppId: !!process.env.CASHFREE_APP_ID,
-          hasSecretKey: !!process.env.CASHFREE_SECRET_KEY
+          hasSecretKey: !!process.env.CASHFREE_SECRET_KEY,
+          appIdPrefix: process.env.CASHFREE_APP_ID ? process.env.CASHFREE_APP_ID.substring(0, 10) + '...' : 'NOT SET'
         });
 
         console.log('Session request payload:', JSON.stringify(sessionRequest, null, 2));
