@@ -20,8 +20,6 @@ router.post('/create', orderController.createOrder);
 // GET /api/orders/:id - Get single order
 router.get('/:id', orderController.getOrder);
 
-// POST /api/orders/:id/cancel - Cancel order
-router.post('/:id/cancel', orderController.cancelOrder);
 
 // GET /api/orders/:id/track - Track order
 router.get('/:id/track', orderController.trackOrder);

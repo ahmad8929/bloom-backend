@@ -354,60 +354,6 @@ const orderController = {
 
   // Manual payment proof/details endpoints removed (online payments handled by Cashfree)
 
-  // Cancel order (only for ongoing orders)
-  async cancelOrder(req, res) {
-    try {
-      const { reason } = req.body;
-      const order = await Order.findById(req.params.id);
-
-      if (!order) {
-        return res.status(404).json({
-          status: 'error',
-          message: 'Order not found'
-        });
-      }
-
-      // Check if user owns the order
-      if (order.user.toString() !== req.user.id) {
-        return res.status(403).json({
-          status: 'error',
-          message: 'Access denied'
-        });
-      }
-
-      // Check if order can be cancelled
-      if (!['confirmed'].includes(order.status)) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Order cannot be cancelled at this stage'
-        });
-      }
-
-      order.status = 'cancelled';
-      order.cancelledAt = new Date();
-      order.cancelReason = reason || 'Cancelled by customer';
-      order.timeline.push({
-        status: 'cancelled',
-        note: `Order cancelled by customer. Reason: ${reason || 'No reason provided'}`,
-        timestamp: new Date(),
-        updatedBy: req.user.id
-      });
-
-      await order.save();
-
-      res.json({
-        status: 'success',
-        message: 'Order cancelled successfully',
-        data: { order }
-      });
-    } catch (error) {
-      console.error('Cancel order error:', error);
-      res.status(500).json({
-        status: 'error',
-        message: 'Internal server error'
-      });
-    }
-  },
 
   // Track order
   async trackOrder(req, res) {
